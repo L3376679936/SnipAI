@@ -13,5 +13,6 @@
 - 初始化 Git 仓库与 `.gitignore`（隔离 `node_modules` 与 `docs/` 文档）。
 - 梳理架构与技术栈：原生 JS + `js-web-screen-shot` + OpenAI 兼容 API 适配层。
 - 确立实验室目录架构：`utools_lab` 统一作为插件合集仓，为本插件创建专属独立目录 `screenshotOcrTranslate`，便于后续扩展孵化更多插件。
-- 彻底摒弃对本机外部安装软件的依赖，使用 C# 原生编写轻量跨屏选区截屏器源码 `src/snipper/Program.cs`，并使用 Windows 原生编译器编译为 `bin/snipper.exe`（自包含、仅 9KB、零外部依赖）。
-- 实现用户输入 `ocr` 自动进入全屏十字光标拉框选区，选区完成立即自动弹窗流式 OCR 提取与翻译。
+- 彻底摒弃对本机外部安装软件的依赖，使用 C# 原生编写轻量跨屏选区截屏器源码 `src/snipper/Program.cs`，并使用 Windows 原生编译器编译为 `bin/snipper.exe`（自包含、仅 16KB、零外部依赖）。
+- 彻底修复 Windows 高 DPI 缩放屏幕被强行放大的问题（通过 Win32 `SetProcessDPIAware` 实现物理 1:1 无损捕获）。
+- 全面引入 Snipaste 风格浮动标注工具栏（支持矩形、箭头、自由画笔、马赛克像素化、撤销、保存文件、复制与 OCR 完成确认）。
