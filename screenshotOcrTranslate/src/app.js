@@ -152,24 +152,39 @@ const captureManager = new ScreenCaptureManager({
 // 从剪贴板读取图片
 async function pasteImageFromClipboard() {
   try {
-    const clipboardItems = await navigator.clipboard.read();
-    for (const item of clipboardItems) {
-      for (const type of item.types) {
-        if (type.startsWith('image/')) {
-          const blob = await item.getType(type);
-          const reader = new FileReader();
-          reader.onload = (e) => {
-            handleNewImage(e.target.result);
-          };
-          reader.readAsDataURL(blob);
-          return;
+    // 1. 优先使用 Electron 原生剪贴板 API（无权限弹窗，瞬间读取）
+    if (window.nativeBridge && window.nativeBridge.readClipboardImage) {
+      const nativeImg = window.nativeBridge.readClipboardImage();
+      if (nativeImg) {
+        handleNewImage(nativeImg);
+        showToast('已从剪贴板载入图片');
+        return;
+      }
+    }
+
+    // 2. 网页 API 兜底
+    if (navigator.clipboard && navigator.clipboard.read) {
+      const clipboardItems = await navigator.clipboard.read();
+      for (const item of clipboardItems) {
+        for (const type of item.types) {
+          if (type.startsWith('image/')) {
+            const blob = await item.getType(type);
+            const reader = new FileReader();
+            reader.onload = (e) => {
+              handleNewImage(e.target.result);
+              showToast('已从剪贴板载入图片');
+            };
+            reader.readAsDataURL(blob);
+            return;
+          }
         }
       }
     }
-    showToast('剪贴板中未检测到图片，请先截图复制');
+
+    showToast('剪贴板中未检测到图片，请先复制或截图');
   } catch (err) {
     console.warn('读取剪贴板失败:', err);
-    showToast('无法直接读取剪贴板，请尝试直接截图');
+    showToast('无法读取剪贴板图片');
   }
 }
 
@@ -317,11 +332,15 @@ selectTargetLang.addEventListener('change', () => {
   }
 });
 
+// 默认设置适宜高度
+if (window.nativeBridge && window.nativeBridge.setHeight) {
+  window.nativeBridge.setHeight(600);
+}
+
 // 监听 Rubick 宿主激活
 if (window.nativeBridge && window.nativeBridge.onPluginEnter) {
   window.nativeBridge.onPluginEnter((action) => {
-    // 设置适宜的高度
-    window.nativeBridge.setHeight(560);
+    window.nativeBridge.setHeight(600);
 
     // 如果是通过复制图片触发插件的
     if (action.type === 'img' && action.payload) {
