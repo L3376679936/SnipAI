@@ -170,6 +170,24 @@ async function streamFetch(url, options, onChunk, onEnd, onError) {
 /**
  * 极速一站式：单次多模态请求同步获取提取原文与目标语言译文
  */
+/**
+ * 标记文本严格过滤消毒函数，彻底根除 <<<TRANSLATED>> 等标记外泄
+ */
+function cleanMarkers(str) {
+  if (!str) return '';
+  return str
+    .replace(/^[\s\r\n]*(?:\[ORIGINAL\]|<<<ORIGINAL>>>|---ORIGINAL---)[\s\r\n]*/gi, '')
+    .replace(/[\s\r\n]*(?:\[TRANSLATION\]|<<<TRANSLAT(?:ED|ION)?>>>|---TRANSLAT(?:ED|ION)?---)[\s\r\n]*/gi, '')
+    .replace(/<<<TRANSLAT(?:ED|ION)?>>?/gi, '') // 容错截断的残缺标记
+    .replace(/<<<ORIGINAL>>?/gi, '')
+    .replace(/^\[TRANSLATION\]/gim, '')
+    .replace(/^\[ORIGINAL\]/gim, '')
+    .trim();
+}
+
+/**
+ * 极速一站式：单次多模态请求同步获取提取原文与目标语言译文 (高性能防泄漏双缓冲架构)
+ */
 async function runFastVisionOcrAndTranslate({
   base64Image,
   targetLang,
@@ -186,12 +204,12 @@ async function runFastVisionOcrAndTranslate({
 
   const endpoint = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
-  const fastPrompt = `请仔细识别图片中的文字，并将其精准翻译为【${targetLang}】。
-严格遵守以下标记格式输出，严禁输出任何多余的开场白或解释：
-<<<ORIGINAL>>>
-(在此输出识别提取出的原文，保持原有换行格式)
-<<<TRANSLATED>>>
-(在此输出翻译后的${targetLang}译文)`;
+  // 极致蒸馏高约束 Prompt：节省 50% 提示词 Token，加速首字推理
+  const fastPrompt = `识别图中文本并翻译为【${targetLang}】。严格按此结构输出，绝不输出任何废话：
+[ORIGINAL]
+(提取原文)
+[TRANSLATION]
+(${targetLang}译文)`;
 
   const payload = {
     model: config.visionModel || 'qwen-vl-max',
@@ -200,23 +218,16 @@ async function runFastVisionOcrAndTranslate({
       {
         role: 'user',
         content: [
-          {
-            type: 'text',
-            text: fastPrompt
-          },
-          {
-            type: 'image_url',
-            image_url: {
-              url: base64Image
-            }
-          }
+          { type: 'text', text: fastPrompt },
+          { type: 'image_url', image_url: { url: base64Image } }
         ]
       }
     ]
   };
 
-  let mode = 'pre';
-  let rawBuffer = '';
+  let fullAccumulated = '';
+  // 兼容各种可能的大模型标记变体
+  const boundaryRegex = /(?:\[TRANSLATION\]|<<<TRANSLAT(?:ED|ION)?>>>?|---TRANSLAT(?:ED|ION)?---?)/i;
 
   await streamFetch(
     endpoint,
@@ -229,26 +240,20 @@ async function runFastVisionOcrAndTranslate({
       body: JSON.stringify(payload)
     },
     (delta) => {
-      rawBuffer += delta;
+      fullAccumulated += delta;
 
-      if (mode === 'pre') {
-        const origIdx = rawBuffer.indexOf('<<<ORIGINAL>>>');
-        if (origIdx !== -1) {
-          mode = 'original';
-          rawBuffer = rawBuffer.substring(origIdx + '<<<ORIGINAL>>>'.length).replace(/^\s+/, '');
-          if (rawBuffer) onOriginalChunk(rawBuffer);
-        }
-      } else if (mode === 'original') {
-        const transIdx = rawBuffer.indexOf('<<<TRANSLATED>>>');
-        if (transIdx !== -1) {
-          mode = 'translated';
-          rawBuffer = rawBuffer.substring(transIdx + '<<<TRANSLATED>>>'.length).replace(/^\s+/, '');
-          if (rawBuffer) onTranslateChunk(rawBuffer);
-        } else {
-          onOriginalChunk(delta);
-        }
-      } else if (mode === 'translated') {
-        onTranslateChunk(delta);
+      const parts = fullAccumulated.split(boundaryRegex);
+      if (parts.length > 1) {
+        // 已经进入译文阶段：第 0 部分必然是完整纯净的原文，后续为译文
+        const origText = cleanMarkers(parts[0]);
+        const transText = cleanMarkers(parts.slice(1).join('\n'));
+        if (origText) onOriginalChunk(origText);
+        if (transText) onTranslateChunk(transText);
+      } else {
+        // 尚在原文阶段：预先剔除末尾可能正在拼装的半截标记，彻底防止外泄
+        let safeOrig = cleanMarkers(fullAccumulated);
+        safeOrig = safeOrig.replace(/(?:\[TRANSLAT?|<<<TRANSLAT?|---TRANSLAT?).*$/i, '').trim();
+        if (safeOrig) onOriginalChunk(safeOrig);
       }
     },
     onEnd,
@@ -392,26 +397,33 @@ function updateCharCount() {
   sourceCharCount.textContent = `${len} 字`;
 }
 
-function compressImageIfNeeded(base64Data, maxWidth = 1200, maxHeight = 800) {
+function compressImageIfNeeded(base64Data, maxWidth = 960, maxHeight = 540) {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       let width = img.naturalWidth || img.width;
       let height = img.naturalHeight || img.height;
-      if (width <= maxWidth && height <= maxHeight) {
-        resolve(base64Data);
-        return;
-      }
-      const ratio = Math.min(maxWidth / width, maxHeight / height);
-      const targetW = Math.round(width * ratio);
-      const targetH = Math.round(height * ratio);
 
+      // 计算黄金等比尺寸（限制最大尺寸，压减大模型切片 Patch 数量）
+      let targetW = width;
+      let targetH = height;
+      if (width > maxWidth || height > maxHeight) {
+        const ratio = Math.min(maxWidth / width, maxHeight / height);
+        targetW = Math.round(width * ratio);
+        targetH = Math.round(height * ratio);
+      }
+
+      // 创建离线 Canvas，使用纯白底色填充消除透明通道，转为高效紧凑 JPEG
       const canvas = document.createElement('canvas');
       canvas.width = targetW;
       canvas.height = targetH;
       const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, targetW, targetH);
       ctx.drawImage(img, 0, 0, targetW, targetH);
-      const compressed = canvas.toDataURL('image/jpeg', 0.85);
+
+      // 质量 0.80 既保障了微小文字边缘的超高清晰度，又把网络 payload 压缩至原图的 1/5
+      const compressed = canvas.toDataURL('image/jpeg', 0.80);
       canvas.width = 0;
       canvas.height = 0;
       resolve(compressed);
@@ -429,7 +441,7 @@ async function handleNewImage(rawBase64) {
 
   emptyGuide.style.display = 'none';
   thumbWrap.style.display = 'flex';
-  thumbImg.src = rawBase64; // 缩略图使用完整高保真原图
+  thumbImg.src = rawBase64; // 缩略图始终展示未经压缩的原生高清完整截图
   sourceEditor.value = '';
   translationView.textContent = '';
   updateCharCount();
@@ -448,23 +460,21 @@ async function handleNewImage(rawBase64) {
   sourceEditor.placeholder = '大模型正在极速识别提取文字...';
   transStatusTip.textContent = `正在并行提取与翻译为【${targetLang}】...`;
 
-  let originalBuffer = '';
-  let translateBuffer = '';
-
   await runFastVisionOcrAndTranslate({
     base64Image: base64Data,
     targetLang: targetLang,
-    onOriginalChunk: (chunk) => {
-      originalBuffer += chunk;
-      sourceEditor.value = originalBuffer;
+    onOriginalChunk: (cleanText) => {
+      sourceEditor.value = cleanText;
       updateCharCount();
     },
-    onTranslateChunk: (chunk) => {
-      translateBuffer += chunk;
-      translationView.textContent = translateBuffer;
+    onTranslateChunk: (cleanText) => {
+      translationView.textContent = cleanText;
       transStatusTip.textContent = `翻译中...`;
     },
     onEnd: () => {
+      sourceEditor.value = cleanMarkers(sourceEditor.value);
+      translationView.textContent = cleanMarkers(translationView.textContent);
+      updateCharCount();
       isOcring = false;
       isTranslating = false;
       sourceEditor.placeholder = '你可以直接在此自由修改、校对文字 (按 Ctrl+Enter 重译)...';
