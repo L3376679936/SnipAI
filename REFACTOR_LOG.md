@@ -14,5 +14,5 @@
 - 梳理架构与技术栈：原生 JS + `js-web-screen-shot` + OpenAI 兼容 API 适配层。
 - 确立实验室目录架构：`utools_lab` 统一作为插件合集仓，为本插件创建专属独立目录 `screenshotOcrTranslate`，便于后续扩展孵化更多插件。
 - 彻底摒弃对本机外部安装软件的依赖，使用 C# 原生编写轻量跨屏选区截屏器源码 `src/snipper/Program.cs`，并使用 Windows 原生编译器编译为 `bin/snipper.exe`（自包含、仅 16KB、零外部依赖）。
-- 彻底修复 Windows 高 DPI 缩放屏幕被强行放大的问题（通过 Win32 `SetProcessDPIAware` 实现物理 1:1 无损捕获）。
-- 全面引入 Snipaste 风格浮动标注工具栏（支持矩形、箭头、自由画笔、马赛克像素化、撤销、保存文件、复制与 OCR 完成确认）。
+- 彻底根治内存堆积与系统假死现象：使用“四矩形几何遮罩法”剔除全景位图的重复缓存，马赛克改为仅针对局部区域按需生成；在程序退出时显式执行 `Dispose()` 与垃圾回收 `GC.Collect()`。
+- 前端引入 Canvas 智能图片内存防膨胀压缩机制，防止大分辨率截图导致 V8 引擎堆内存暴涨。
