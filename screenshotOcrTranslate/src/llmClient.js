@@ -14,6 +14,15 @@ const STORAGE_KEY = 'rubick_ai_ocr_settings_v1';
 
 export const configManager = {
   get: () => {
+    // 1. 优先从用户主目录本地磁盘文件读取（跨窗口/跨重启永不丢失）
+    if (window.nativeBridge && typeof window.nativeBridge.loadConfig === 'function') {
+      const fileCfg = window.nativeBridge.loadConfig();
+      if (fileCfg && typeof fileCfg === 'object') {
+        return { ...DEFAULT_CONFIG, ...fileCfg };
+      }
+    }
+
+    // 2. 尝试从 localStorage 恢复
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
@@ -26,6 +35,12 @@ export const configManager = {
   },
 
   save: (newConfig) => {
+    // 1. 优先保存至磁盘物理文件
+    if (window.nativeBridge && typeof window.nativeBridge.saveConfig === 'function') {
+      window.nativeBridge.saveConfig(newConfig);
+    }
+
+    // 2. 同时写入 localStorage 作为镜像
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(newConfig));
       return true;

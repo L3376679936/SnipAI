@@ -235,18 +235,24 @@ function closeSettings() {
 }
 
 function saveSettings() {
+  const apiKeyVal = cfgApiKey.value.trim();
+  if (!apiKeyVal) {
+    showToast('请填写有效的 API Key 后再保存！');
+    return;
+  }
+
   const ok = configManager.save({
     baseUrl: cfgBaseUrl.value.trim(),
-    apiKey: cfgApiKey.value.trim(),
+    apiKey: apiKeyVal,
     visionModel: cfgVisionModel.value.trim(),
     translateModel: cfgTranslateModel.value.trim()
   });
 
   if (ok) {
-    showToast('配置已保存！');
+    showToast('✓ 配置已永久保存到本地磁盘！');
     closeSettings();
   } else {
-    showToast('保存配置失败');
+    showToast('保存配置失败，请检查写入权限');
   }
 }
 

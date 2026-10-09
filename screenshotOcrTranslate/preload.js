@@ -1,11 +1,44 @@
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { clipboard } = require('electron');
 const { execFile } = require('child_process');
+
+// 统一保存在用户主目录下的持久化配置文件，跨会话/跨重启永不丢失
+const CONFIG_FILE_PATH = path.join(os.homedir(), '.rubick_ocr_translate_config.json');
 
 /**
  * 宿主与底层能力桥接器 (纯内置自包含实现，无任何外部软件依赖)
  */
 window.nativeBridge = {
+  /**
+   * 持久化保存大模型配置到本地磁盘文件
+   */
+  saveConfig: (cfg) => {
+    try {
+      fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(cfg, null, 2), 'utf-8');
+      return true;
+    } catch (err) {
+      console.error('写入磁盘配置失败:', err);
+      return false;
+    }
+  },
+
+  /**
+   * 从本地磁盘文件读取大模型配置
+   */
+  loadConfig: () => {
+    try {
+      if (fs.existsSync(CONFIG_FILE_PATH)) {
+        const text = fs.readFileSync(CONFIG_FILE_PATH, 'utf-8');
+        return JSON.parse(text);
+      }
+    } catch (err) {
+      console.warn('读取磁盘配置失败:', err);
+    }
+    return null;
+  },
+
   /**
    * 唤起项目内置编译的轻量全屏选区截屏器 (bin/snipper.exe)
    */
