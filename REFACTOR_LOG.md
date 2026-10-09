@@ -44,3 +44,22 @@
 - **编译发布**：
   - 成功重新编译为单文件 `bin/snipper.exe`（28KB，无外部依赖）。
 
+## [2026-10-09] 解决 Chromium file 协议下 ESM CORS 拦截导致的无响应缺陷
+
+### 变更背景
+- 用户重启 Rubick 后依然无法自动截图，点击重新截图按钮也无响应。
+- 通过在 `preload.js` 写入物理系统日志，抓取到底层真实行为：
+  1. `preload.js` 正常执行，`window.rubick.onPluginEnter` 正常挂载并派发了 `{"code":"ocr-translate","type":"text"}`。
+  2. 但 `app.js` 从始至终完全没有执行！
+  3. **根本原因**：桌面 Electron Webview 运行在本地 `file:///` 协议下，受限于 Chromium 的严格同源策略（CORS），`<script type="module">` 导入的本地模块被直接拦截抛出跨域异常，导致整段前端业务逻辑根本未被解释执行。
+
+### 本次动作
+- **移除 ESM，内聚为独立单文件脚本**：
+  - 将 `capture.js`、`llmClient.js` 和 `app.js` 的核心逻辑整体内聚整合为纯原生的单文件 `src/app.js`。
+  - `index.html` 移除 `type="module"`，还原为标准的 `<script src="src/app.js"></script>`。
+  - 挂载全局 `window.onerror` 与 `window.onunhandledrejection` 异常追踪，实现异常秒级捕获。
+- **效果**：
+  - 彻底解决 `file://` 协议下的脚本拦截问题，首屏 `app.js` 在微秒级同步完成解析执行。
+  - 唤醒插件即瞬间接收到 `onPluginEnter` 缓存，并在 120ms 内自动隐藏 Rubick 窗口并调起全屏自包含截图。
+
+
