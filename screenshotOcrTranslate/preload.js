@@ -1,79 +1,46 @@
-const screenshot = require('screenshot-desktop');
+const path = require('path');
 const { clipboard } = require('electron');
-const { exec, execSync } = require('child_process');
+const { execFile } = require('child_process');
 
 /**
- * 宿主与底层能力桥接器
+ * 宿主与底层能力桥接器 (纯内置自包含实现，无任何外部软件依赖)
  */
 window.nativeBridge = {
   /**
-   * 唤起系统级手动划选截屏并自动感知选区剪贴板载入
+   * 唤起项目内置编译的轻量全屏选区截屏器 (bin/snipper.exe)
    */
   captureScreen: () => {
     return new Promise((resolve, reject) => {
-      // 1. 隐藏 Rubick 窗口，给屏幕让出视野
+      // 1. 隐藏 Rubick 主窗口，露出屏幕全部视野
       window.nativeBridge.hideMainWindow();
 
-      // 2. 记录截图前剪贴板中的图片
-      let prevDataUrl = '';
-      try {
-        const prevImg = clipboard.readImage();
-        if (prevImg && !prevImg.isEmpty()) {
-          prevDataUrl = prevImg.toDataURL();
+      // 2. 寻址项目自包含的选区截图程序
+      const snipperExePath = path.join(__dirname, 'bin', 'snipper.exe');
+
+      // 3. 执行截图程序
+      execFile(snipperExePath, (err, stdout, stderr) => {
+        // 无论成功与否，恢复主窗口显示
+        window.nativeBridge.showMainWindow();
+
+        if (err) {
+          // 退出码为 1 表示用户主动按 Esc 或右键取消了截图
+          console.warn('截图取消或未完成:', err.message);
+          reject(new Error('截图已取消'));
+          return;
         }
-      } catch (e) {
-        console.warn('获取前置剪贴板失败:', e);
-      }
 
-      // 3. 唤起手动划选截屏：优先调用本机已运行的 Snipaste 进程
-      let snipastePath = '';
-      try {
-        const stdout = execSync(
-          'powershell -NoProfile -Command "(Get-Process -Name snipaste -ErrorAction SilentlyContinue).Path"',
-          { encoding: 'utf-8', timeout: 1500 }
-        );
-        snipastePath = stdout.trim();
-      } catch (e) {
-        console.warn('查找 Snipaste 失败:', e);
-      }
-
-      if (snipastePath) {
-        // 直接调用原生 Snipaste 划选
-        exec(`"${snipastePath}" snip`, (err) => {
-          if (err) {
-            console.warn('执行 Snipaste snip 失败，回退 Windows 原生截图:', err);
-            exec('start ms-screenclip:?cliptype=Rectangle');
-          }
-        });
-      } else {
-        // 回退到 Windows 原生矩形选区截图
-        exec('start ms-screenclip:?cliptype=Rectangle');
-      }
-
-      // 4. 轮询剪贴板，等待用户框选完成（双击选区、Enter 或复制）
-      const startTime = Date.now();
-      const checkTimer = setInterval(() => {
+        // 退出码为 0，说明用户框选完成，图片已精准放入剪贴板
         try {
-          const currentImg = clipboard.readImage();
-          if (currentImg && !currentImg.isEmpty()) {
-            const currentDataUrl = currentImg.toDataURL();
-            // 检测到剪贴板出现了新的截图图片
-            if (currentDataUrl && currentDataUrl !== prevDataUrl) {
-              clearInterval(checkTimer);
-              window.nativeBridge.showMainWindow();
-              resolve(currentDataUrl);
-              return;
-            }
+          const img = clipboard.readImage();
+          if (img && !img.isEmpty()) {
+            resolve(img.toDataURL());
+            return;
           }
-        } catch (err) {}
-
-        // 45秒超时保护
-        if (Date.now() - startTime > 45000) {
-          clearInterval(checkTimer);
-          window.nativeBridge.showMainWindow();
-          reject(new Error('截图未完成或已取消'));
+          reject(new Error('未在剪贴板中检测到截取的图片'));
+        } catch (clipErr) {
+          reject(clipErr);
         }
-      }, 300);
+      });
     });
   },
 
