@@ -138,16 +138,34 @@ window.nativeBridge = {
 
   /**
    * 监听插件激活（包括由剪贴板图片直接唤起）
+   * 采用提前捕获 + 缓存重放机制，杜绝因 ES Module 异步加载慢而错过 Rubick 首屏 onPluginEnter 事件
    */
   onPluginEnter: (callback) => {
-    const handler = (action) => {
-      callback && callback(action);
-    };
-
-    if (window.rubick && typeof window.rubick.onPluginEnter === 'function') {
-      window.rubick.onPluginEnter(handler);
-    } else if (window.utools && typeof window.utools.onPluginEnter === 'function') {
-      window.utools.onPluginEnter(handler);
+    _activeEnterCallback = callback;
+    if (_cachedEnterAction && callback) {
+      try {
+        callback(_cachedEnterAction);
+      } catch (e) {
+        console.error('执行缓存的 onPluginEnter 失败:', e);
+      }
     }
   }
 };
+
+// 在 preload 加载的第一时间就挂载宿主监听
+let _cachedEnterAction = null;
+let _activeEnterCallback = null;
+
+const globalEnterDispatcher = (action) => {
+  _cachedEnterAction = action;
+  if (_activeEnterCallback) {
+    _activeEnterCallback(action);
+  }
+};
+
+if (window.rubick && typeof window.rubick.onPluginEnter === 'function') {
+  window.rubick.onPluginEnter(globalEnterDispatcher);
+} else if (window.utools && typeof window.utools.onPluginEnter === 'function') {
+  window.utools.onPluginEnter(globalEnterDispatcher);
+}
+

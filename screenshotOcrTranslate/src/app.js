@@ -1,4 +1,4 @@
-import { configManager, runVisionOcr, runTranslate, testApiConnection } from './llmClient.js';
+import { configManager, runVisionOcr, runTranslate, runFastVisionOcrAndTranslate, testApiConnection } from './llmClient.js';
 import { ScreenCaptureManager } from './capture.js';
 
 // DOM 元素引用
@@ -352,6 +352,10 @@ btnCopyTranslation.addEventListener('click', () => {
 });
 
 btnClearSource.addEventListener('click', () => {
+  currentImageBase64 = null;
+  emptyGuide.style.display = 'flex';
+  thumbWrap.style.display = 'none';
+  thumbImg.src = '';
   sourceEditor.value = '';
   translationView.textContent = '';
   updateCharCount();
@@ -395,20 +399,38 @@ if (window.nativeBridge && window.nativeBridge.setHeight) {
   window.nativeBridge.setHeight(600);
 }
 
-// 监听 Rubick 宿主激活
+// 自动截图启动状态机
+let hasAutoTriggeredCapture = false;
+
+function triggerAutoCaptureIfEmpty() {
+  if (hasAutoTriggeredCapture) return;
+  if (!currentImageBase64) {
+    hasAutoTriggeredCapture = true;
+    setTimeout(() => {
+      captureManager.startCapture();
+    }, 150);
+  }
+}
+
+// 1. 监听 Rubick / uTools 宿主激活
 if (window.nativeBridge && window.nativeBridge.onPluginEnter) {
   window.nativeBridge.onPluginEnter((action) => {
     window.nativeBridge.setHeight(600);
 
-    // 1. 如果是通过直接复制已有图片呼出的，立即开始提取该图片
-    if (action.type === 'img' && action.payload) {
+    // 如果通过复制外部图片呼出，直接提取
+    if (action && action.type === 'img' && action.payload) {
+      hasAutoTriggeredCapture = true;
       handleNewImage(action.payload);
       return;
     }
 
-    // 2. 如果是输入关键字（ocr / 截图翻译）打开插件，立即自动唤起手动划选截图！
-    setTimeout(() => {
-      captureManager.startCapture();
-    }, 120);
+    // 关键字呼出且无图，直接进入截图状态！
+    triggerAutoCaptureIfEmpty();
   });
 }
+
+// 2. 首屏加载兜底：打开插件无图时自动进入截图模式
+setTimeout(() => {
+  triggerAutoCaptureIfEmpty();
+}, 250);
+
