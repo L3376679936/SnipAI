@@ -326,9 +326,22 @@ sourceEditor.addEventListener('keydown', (e) => {
 
 btnTranslateAction.addEventListener('click', () => triggerTranslation());
 
-selectTargetLang.addEventListener('change', () => {
-  if (sourceEditor.value.trim()) {
-    triggerTranslation();
+// 支持在窗口内直接按 Ctrl+V 粘贴截图识别
+window.addEventListener('paste', (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.indexOf('image') !== -1) {
+      const file = item.getAsFile();
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        handleNewImage(event.target.result);
+        showToast('已从剪贴板粘贴截图');
+      };
+      reader.readAsDataURL(file);
+      e.preventDefault();
+      return;
+    }
   }
 });
 

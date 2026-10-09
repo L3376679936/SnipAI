@@ -1,5 +1,5 @@
 const screenshot = require('screenshot-desktop');
-const { clipboard, nativeImage } = require('electron');
+const { clipboard } = require('electron');
 const { exec } = require('child_process');
 
 /**
@@ -7,50 +7,42 @@ const { exec } = require('child_process');
  */
 window.nativeBridge = {
   /**
-   * 优先调用 Rubick 原生 screenCapture，若不支持则调用 Windows 原生选区截图
+   * 唤起系统级划选截屏并自动感知剪贴板载入
    */
   captureScreen: () => {
     return new Promise((resolve, reject) => {
-      // 1. 尝试 Rubick / uTools 原生截屏 API
-      const hostScreenCapture =
-        (window.rubick && typeof window.rubick.screenCapture === 'function' && window.rubick.screenCapture) ||
-        (window.utools && typeof window.utools.screenCapture === 'function' && window.utools.screenCapture);
+      // 1. 隐藏 Rubick 窗口，给屏幕让出视野
+      window.nativeBridge.hideMainWindow();
 
-      if (hostScreenCapture) {
-        try {
-          hostScreenCapture((base64) => {
-            if (base64) {
-              resolve(base64);
-            } else {
-              reject(new Error('用户取消了截图'));
-            }
-          });
-          return;
-        } catch (e) {
-          console.warn('调用宿主 screenCapture 失败，转为系统截图:', e);
+      // 2. 记录截图前剪贴板中的图片
+      let prevDataUrl = '';
+      try {
+        const prevImg = clipboard.readImage();
+        if (prevImg && !prevImg.isEmpty()) {
+          prevDataUrl = prevImg.toDataURL();
         }
+      } catch (e) {
+        console.warn('获取前置剪贴板失败:', e);
       }
 
-      // 2. Windows 系统原生 Snipping Tool 区域截图（Win+Shift+S 底层协议）
+      // 3. 唤起 Windows 原生划选截屏（十字光标区域选择）
       if (process.platform === 'win32') {
-        window.nativeBridge.hideMainWindow();
-
-        // 记录截图前的剪贴板状态
-        const prevImg = clipboard.readImage();
-        const prevDataUrl = prevImg && !prevImg.isEmpty() ? prevImg.toDataURL() : '';
-
-        // 呼起 Windows 原生划选截屏
-        exec('explorer.exe ms-screenclip:');
+        exec('start ms-screenclip:', (err) => {
+          if (err) {
+            console.warn('通过 start 唤起失败，尝试 explorer:', err);
+            exec('explorer.exe ms-screenclip:');
+          }
+        });
 
         const startTime = Date.now();
-        const timer = setInterval(() => {
+        const checkTimer = setInterval(() => {
           try {
             const currentImg = clipboard.readImage();
             if (currentImg && !currentImg.isEmpty()) {
               const currentDataUrl = currentImg.toDataURL();
-              // 检测到剪贴板出现了新截取的图片
+              // 检测到剪贴板出现了新的截图图片
               if (currentDataUrl && currentDataUrl !== prevDataUrl) {
-                clearInterval(timer);
+                clearInterval(checkTimer);
                 window.nativeBridge.showMainWindow();
                 resolve(currentDataUrl);
                 return;
@@ -58,22 +50,25 @@ window.nativeBridge = {
             }
           } catch (err) {}
 
-          // 30 秒超时
-          if (Date.now() - startTime > 30000) {
-            clearInterval(timer);
+          // 40秒超时保护
+          if (Date.now() - startTime > 40000) {
+            clearInterval(checkTimer);
             window.nativeBridge.showMainWindow();
-            reject(new Error('截图超时或已取消'));
+            reject(new Error('截图未完成或已取消'));
           }
-        }, 350);
+        }, 300);
+
         return;
       }
 
-      // 3. 兜底方案：全屏抓取底图
+      // 非 Windows 平台回退方案
       screenshot({ format: 'png' })
         .then((buf) => {
+          window.nativeBridge.showMainWindow();
           resolve(`data:image/png;base64,${buf.toString('base64')}`);
         })
         .catch((err) => {
+          window.nativeBridge.showMainWindow();
           reject(err);
         });
     });
