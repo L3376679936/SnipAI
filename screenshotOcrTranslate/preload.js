@@ -102,29 +102,40 @@ window.nativeBridge = {
 
       // 3. 执行截图程序
       execFile(snipperExePath, (err, stdout, stderr) => {
-        // 无论成功与否，恢复主窗口显示
-        window.nativeBridge.showMainWindow();
+        const outStr = (stdout || '').trim();
+        logDebug(`snipper.exe 退出: code=${err ? err.code : 0}, stdout=${outStr}`);
 
-        if (err) {
-          logDebug(`snipper.exe 退出或取消: code=${err.code}, msg=${err.message}`);
+        // 用户取消截图 (点 ✕ 或按 Esc)
+        if (err && (err.code === 1 || outStr.includes('ACTION:CANCEL'))) {
+          logDebug('用户取消截图');
           reject(new Error('截图已取消'));
           return;
         }
 
-        logDebug('snipper.exe 成功退出，读取剪贴板');
-        // 退出码为 0，说明用户框选完成，图片已精准放入剪贴板
-        try {
-          const img = clipboard.readImage();
-          if (img && !img.isEmpty()) {
-            logDebug('成功从剪贴板读取到图片');
-            resolve(img.toDataURL());
-            return;
+        const isOcrAction = outStr.includes('ACTION:OCR') || (err && err.code === 10);
+        const isCopyOnly = outStr.includes('ACTION:COPY') || (!isOcrAction && !err);
+
+        if (isCopyOnly) {
+          logDebug('用户仅选择确定截图 (✔)，图片已在剪贴板，不触发 OCR');
+          resolve({ action: 'copy' });
+          return;
+        }
+
+        if (isOcrAction) {
+          logDebug('用户点击了【识别文字】按钮，恢复主窗口并启动 OCR 翻译');
+          window.nativeBridge.showMainWindow();
+          try {
+            const img = clipboard.readImage();
+            if (img && !img.isEmpty()) {
+              logDebug('成功从剪贴板读取到图片');
+              resolve({ action: 'ocr', dataUrl: img.toDataURL() });
+              return;
+            }
+            reject(new Error('未在剪贴板中检测到截取的图片'));
+          } catch (clipErr) {
+            logDebug(`读取剪贴板异常: ${clipErr.message}`);
+            reject(clipErr);
           }
-          logDebug('剪贴板中未检测到图片');
-          reject(new Error('未在剪贴板中检测到截取的图片'));
-        } catch (clipErr) {
-          logDebug(`读取剪贴板异常: ${clipErr.message}`);
-          reject(clipErr);
         }
       });
     });

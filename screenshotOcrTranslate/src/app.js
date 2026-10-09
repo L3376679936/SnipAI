@@ -347,17 +347,33 @@ async function testApiConnection(customCfg) {
 /**
  * 3. 历史记录持久化管理器
  */
+const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000; // 仅保留最近 2 天 (48小时)
+
 const historyManager = {
   getAll: () => {
+    let list = [];
     if (window.nativeBridge && typeof window.nativeBridge.loadHistory === 'function') {
-      const list = window.nativeBridge.loadHistory();
-      if (Array.isArray(list)) return list;
+      const saved = window.nativeBridge.loadHistory();
+      if (Array.isArray(saved)) list = saved;
+    } else {
+      try {
+        const saved = localStorage.getItem('rubick_ai_ocr_history_v1');
+        if (saved) list = JSON.parse(saved);
+      } catch (e) {}
     }
-    try {
-      const saved = localStorage.getItem('rubick_ai_ocr_history_v1');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    return [];
+
+    // 过滤超过 2 天的数据，自动清理过期历史
+    const now = Date.now();
+    const validList = list.filter((item) => {
+      if (!item.timestamp) return false;
+      return (now - item.timestamp) <= TWO_DAYS_MS;
+    });
+
+    if (validList.length !== list.length) {
+      historyManager.saveAll(validList);
+    }
+
+    return validList;
   },
 
   saveAll: (list) => {
@@ -371,15 +387,15 @@ const historyManager = {
 
   add: (item) => {
     const list = historyManager.getAll();
-    const filtered = list.filter(h => h.id !== item.id);
+    const filtered = list.filter((h) => h.id !== item.id);
     filtered.unshift(item);
-    const trimmed = filtered.slice(0, 30); // 最多保留 30 条历史
+    const trimmed = filtered.slice(0, 50); // 保留最近 2 天内记录
     historyManager.saveAll(trimmed);
   },
 
   delete: (id) => {
     const list = historyManager.getAll();
-    const updated = list.filter(h => h.id !== id);
+    const updated = list.filter((h) => h.id !== id);
     historyManager.saveAll(updated);
   },
 
@@ -533,7 +549,7 @@ async function handleNewImage(rawBase64) {
       transStatusTip.textContent = '翻译完成';
       showToast('✓ 提取与翻译完成！');
 
-      // 自动归档至历史记录
+      // 自动归档至历史记录 (最近 2 天)
       if (finalOrig || finalTrans) {
         historyManager.add({
           id: 'hist_' + Date.now(),
@@ -602,8 +618,19 @@ async function triggerTranslation(textToTranslate) {
 }
 
 const captureManager = new ScreenCaptureManager({
-  onComplete: (base64) => {
-    handleNewImage(base64);
+  onComplete: (res) => {
+    // 若用户仅点击了【确定截图 ✔】或双击，仅复制到剪贴板，不触发 OCR
+    if (res && res.action === 'copy') {
+      showToast('✓ 截图已复制到系统剪贴板');
+      return;
+    }
+
+    // 若用户点击了专门的【识别文字】按钮，启动 OCR
+    const base64Data = (res && res.dataUrl) ? res.dataUrl : (typeof res === 'string' ? res : null);
+    if (base64Data) {
+      showToast('正在识别提取文字并翻译...');
+      handleNewImage(base64Data);
+    }
   },
   onCancel: () => {
     showToast('截图已取消');
