@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>截图OCR与智能翻译</title>
+  <link rel="stylesheet" href="src/style.css">
+  <!-- 引入 Snipaste 风格完整截图标注组件 -->
+  <script src="src/lib/screenShotPlugin.umd.js"></script>
+</head>
+<body>
+  <!-- 顶部栏 -->
+  <header class="app-header">
+    <div class="brand">
+      <img src="https://img.icons8.com/fluency/96/screenshot.png" alt="logo" class="brand-icon">
+      <span class="brand-title">截图 OCR & 智能翻译</span>
+    </div>
+    <div class="header-actions">
+      <button id="btnCapture" class="btn btn-primary">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+        重新截图
+      </button>
+      <button id="btnPaste" class="btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+        剪贴板图片
+      </button>
+      <button id="btnSettings" class="btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        API 设置
+      </button>
+    </div>
+  </header>
+
+  <!-- 工作区双栏 -->
+  <main class="workspace">
+    <!-- 左栏：原文与校对编辑区 -->
+    <section class="panel-card">
+      <div class="panel-header">
+        <div class="panel-title-group">
+          <span class="panel-title">提取原文</span>
+          <span id="sourceCharCount" class="badge">0 字</span>
+        </div>
+        <div class="header-actions">
+          <button id="btnCopySource" class="btn btn-sm">复制原文</button>
+          <button id="btnClearSource" class="btn btn-sm">清空</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <!-- 截取的图片缩略图 -->
+        <div id="thumbWrap" class="preview-thumb-wrap" style="display: none;">
+          <img id="thumbImg" src="" alt="截图预览" class="thumb-img" title="点击查看大图">
+          <span class="thumb-meta">截图已加载，点击「重新截图」可重新圈选</span>
+        </div>
+
+        <!-- 空状态引导 -->
+        <div id="emptyGuide" class="empty-guide">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+          <p>点击上方「重新截图」或「剪贴板图片」开始提取</p>
+        </div>
+
+        <!-- 可编辑原文多行文本域 -->
+        <textarea id="sourceEditor" class="editor-textarea" placeholder="OCR 提取出的文字将显示在此处，你可以直接在此自由修改、校对错字或排版..."></textarea>
+      </div>
+      <div class="panel-footer">
+        <span style="font-size: 11px; color: var(--text-muted);">提示：修改文字后按 Ctrl+Enter 立即更新翻译</span>
+        <button id="btnTranslateAction" class="btn btn-primary btn-sm">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+          立即翻译
+        </button>
+      </div>
+    </section>
+
+    <!-- 右栏：译文展示区 -->
+    <section class="panel-card">
+      <div class="panel-header">
+        <div class="panel-title-group">
+          <span class="panel-title">智能译文</span>
+          <select id="selectTargetLang" class="lang-select">
+            <option value="简体中文">翻译为：简体中文</option>
+            <option value="英语" selected>翻译为：英语 (English)</option>
+            <option value="日语">翻译为：日语 (日本語)</option>
+            <option value="韩语">翻译为：韩语 (한국어)</option>
+            <option value="法语">翻译为：法语 (Français)</option>
+            <option value="德语">翻译为：德语 (Deutsch)</option>
+            <option value="俄语">翻译为：俄语 (Русский)</option>
+            <option value="西班牙语">翻译为：西班牙语 (Español)</option>
+            <option value="文言文">翻译为：文言文</option>
+          </select>
+        </div>
+        <div class="header-actions">
+          <button id="btnCopyTranslation" class="btn btn-sm">复制译文</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div id="translationView" class="translation-result"></div>
+      </div>
+      <div class="panel-footer">
+        <span id="transStatusTip" style="font-size: 11px; color: var(--text-muted);">就绪</span>
+      </div>
+    </section>
+  </main>
+
+  <!-- 设置模态抽屉 -->
+  <div id="settingsModal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 style="font-size: 15px; font-weight: 600;">大模型 API 配置</h3>
+        <button id="btnCloseSettings" class="btn btn-sm" style="border: none;">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">API Base URL (兼容 OpenAI 规范)</label>
+          <input id="cfgBaseUrl" type="text" class="form-input" placeholder="https://api.openai.com/v1">
+          <div class="preset-tags">
+            <span style="font-size: 11px; color: var(--text-muted); line-height: 20px;">常用快捷预设：</span>
+            <button type="button" class="tag-btn" data-preset="dashscope">阿里云/通义千问</button>
+            <button type="button" class="tag-btn" data-preset="openai">OpenAI 官方</button>
+            <button type="button" class="tag-btn" data-preset="deepseek">DeepSeek 官方</button>
+            <button type="button" class="tag-btn" data-preset="ollama">本地 Ollama</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">API Key</label>
+          <input id="cfgApiKey" type="password" class="form-input" placeholder="sk-...">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">多模态 OCR 模型名称 (具备视觉能力的模型)</label>
+          <input id="cfgVisionModel" type="text" class="form-input" placeholder="例如: qwen-vl-max 或 gpt-4o-mini">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">翻译模型名称</label>
+          <input id="cfgTranslateModel" type="text" class="form-input" placeholder="例如: qwen-plus 或 deepseek-chat">
+        </div>
+
+        <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">
+          <button id="btnTestConn" type="button" class="btn btn-sm">🔗 测试 API 连通性</button>
+          <span id="testConnResult" style="font-size: 12px;"></span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btnCancelSettings" class="btn">取消</button>
+        <button id="btnSaveSettings" class="btn btn-primary">保存配置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast 提示条 -->
+  <div id="toastBar" class="toast-bar">提示信息</div>
+
+  <!-- 主业务逻辑 -->
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>

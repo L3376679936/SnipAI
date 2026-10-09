@@ -11,5 +11,6 @@
 
 ### 本次动作
 - 初始化 Git 仓库与 `.gitignore`（隔离 `node_modules` 与 `docs/` 文档）。
-- 梳理架构与技术栈：Vite + 原生/Vue3 + `js-web-screen-shot` + OpenAI 兼容 API 适配层。
+- 梳理架构与技术栈：原生 JS + `js-web-screen-shot` + OpenAI 兼容 API 适配层。
+- 确立实验室目录架构：`utools_lab` 统一作为插件合集仓，为本插件创建专属独立目录 `screenshotOcrTranslate`，便于后续扩展孵化更多插件。
 - 撰写设计规格书与实施计划文档。
