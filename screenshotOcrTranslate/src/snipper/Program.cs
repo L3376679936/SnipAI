@@ -16,16 +16,16 @@ namespace RubickSnipper
         [STAThread]
         static int Main(string[] args)
         {
-            // 彻底解决高 DPI 缩放下的放大模糊问题
             try { SetProcessDPIAware(); } catch { }
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
+            Bitmap fullScreenBmp = null;
             try
             {
                 Rectangle bounds = SystemInformation.VirtualScreen;
-                Bitmap fullScreenBmp = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
+                fullScreenBmp = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
                 using (Graphics g = Graphics.FromImage(fullScreenBmp))
                 {
                     g.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);
@@ -37,6 +37,7 @@ namespace RubickSnipper
                     if (res == DialogResult.OK && form.CroppedResult != null)
                     {
                         Clipboard.SetImage(form.CroppedResult);
+                        form.CroppedResult.Dispose();
                         return 0; // 成功
                     }
                 }
@@ -46,8 +47,18 @@ namespace RubickSnipper
                 Console.Error.WriteLine(ex.Message);
                 return 2;
             }
+            finally
+            {
+                if (fullScreenBmp != null)
+                {
+                    fullScreenBmp.Dispose();
+                }
+                // 强制垃圾回收与工作集释放，杜绝内存堆积
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
 
-            return 1; // 取消
+            return 1;
         }
     }
 
@@ -60,9 +71,10 @@ namespace RubickSnipper
         Mosaic
     }
 
-    public abstract class AnnotationItem
+    public abstract class AnnotationItem : IDisposable
     {
         public abstract void Draw(Graphics g);
+        public virtual void Dispose() { }
     }
 
     public class RectAnnotation : AnnotationItem
@@ -123,24 +135,29 @@ namespace RubickSnipper
     public class MosaicAnnotation : AnnotationItem
     {
         public Rectangle Rect;
-        public Bitmap MosaicSourceBmp;
+        public Bitmap MosaicSnippet;
 
         public override void Draw(Graphics g)
         {
-            if (Rect.Width <= 0 || Rect.Height <= 0 || MosaicSourceBmp == null) return;
-            Rectangle valid = Rectangle.Intersect(new Rectangle(0, 0, MosaicSourceBmp.Width, MosaicSourceBmp.Height), Rect);
-            if (valid.Width <= 0 || valid.Height <= 0) return;
+            if (MosaicSnippet != null && Rect.Width > 0 && Rect.Height > 0)
+            {
+                g.DrawImage(MosaicSnippet, Rect);
+            }
+        }
 
-            // 极速 Blit 预生成的马赛克位图，零 CPU 逐像素开销
-            g.DrawImage(MosaicSourceBmp, valid, valid, GraphicsUnit.Pixel);
+        public override void Dispose()
+        {
+            if (MosaicSnippet != null)
+            {
+                MosaicSnippet.Dispose();
+                MosaicSnippet = null;
+            }
         }
     }
 
     public class SnipperForm : Form
     {
         private readonly Bitmap _fullBmp;
-        private readonly Bitmap _darkBmp;          // 预渲染暗化底图（极速消除卡顿）
-        private readonly Bitmap _mosaicBmp;        // 预渲染马赛克底图
         private readonly Rectangle _screenBounds;
 
         private Point _startPoint;
@@ -152,10 +169,9 @@ namespace RubickSnipper
         private ToolType _currentTool = ToolType.None;
         private readonly List<AnnotationItem> _annotations = new List<AnnotationItem>();
         private AnnotationItem _tempAnnotation = null;
-        private readonly Color _activeColor = Color.FromArgb(239, 68, 68); // 鲜明红色
+        private readonly Color _activeColor = Color.FromArgb(239, 68, 68);
         private readonly float _penWidth = 3f;
 
-        // 图标工具栏
         private class ToolButton
         {
             public Rectangle Bounds;
@@ -166,7 +182,12 @@ namespace RubickSnipper
         }
         private readonly List<ToolButton> _toolButtons = new List<ToolButton>();
         private ToolButton _hoveredBtn = null;
-        private Point _lastMousePos;
+
+        // 静态画刷与字体复用，零内存分配
+        private readonly SolidBrush _maskBrush = new SolidBrush(Color.FromArgb(125, 0, 0, 0));
+        private readonly Pen _borderPen = new Pen(Color.FromArgb(59, 130, 246), 2);
+        private readonly Font _uiFont = new Font("Microsoft YaHei", 9f);
+        private readonly Font _tipFont = new Font("Segoe UI", 9f, FontStyle.Bold);
 
         public Bitmap CroppedResult { get; private set; }
 
@@ -175,57 +196,22 @@ namespace RubickSnipper
             _fullBmp = fullBmp;
             _screenBounds = bounds;
 
-            // 1. 预先生成暗化底图（一次性生成，彻底解决鼠标移动时计算 Region 的严重卡顿）
-            _darkBmp = new Bitmap(fullBmp.Width, fullBmp.Height, PixelFormat.Format32bppArgb);
-            using (Graphics g = Graphics.FromImage(_darkBmp))
-            {
-                g.DrawImage(fullBmp, 0, 0);
-                using (SolidBrush mask = new SolidBrush(Color.FromArgb(130, 0, 0, 0)))
-                {
-                    g.FillRectangle(mask, 0, 0, _darkBmp.Width, _darkBmp.Height);
-                }
-            }
-
-            // 2. 预先生成全局低分辨率马赛克底图（极速无延迟贴图）
-            _mosaicBmp = GenerateMosaicPreview(fullBmp, 12);
-
             this.FormBorderStyle = FormBorderStyle.None;
             this.StartPosition = FormStartPosition.Manual;
             this.Location = bounds.Location;
             this.Size = bounds.Size;
             this.TopMost = true;
             this.ShowInTaskbar = false;
-            this.DoubleBuffered = true;
+            this.DoubleBuffered = true; // 开启 WinForms 内部双缓冲
             this.Cursor = Cursors.Cross;
             this.KeyPreview = true;
-        }
-
-        private static Bitmap GenerateMosaicPreview(Bitmap src, int scale)
-        {
-            int w = Math.Max(1, src.Width / scale);
-            int h = Math.Max(1, src.Height / scale);
-            Bitmap small = new Bitmap(w, h, PixelFormat.Format32bppArgb);
-            using (Graphics g = Graphics.FromImage(small))
-            {
-                g.InterpolationMode = InterpolationMode.NearestNeighbor;
-                g.DrawImage(src, 0, 0, w, h);
-            }
-
-            Bitmap mosaic = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppArgb);
-            using (Graphics g = Graphics.FromImage(mosaic))
-            {
-                g.InterpolationMode = InterpolationMode.NearestNeighbor;
-                g.DrawImage(small, 0, 0, src.Width, src.Height);
-            }
-            small.Dispose();
-            return mosaic;
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
             {
-                // 1. 检查是否点击了工具栏
+                // 1. 点击工具栏
                 if (_hasSelected)
                 {
                     foreach (ToolButton btn in _toolButtons)
@@ -261,7 +247,7 @@ namespace RubickSnipper
                 _isSelecting = true;
                 _hasSelected = false;
                 _currentTool = ToolType.None;
-                _annotations.Clear();
+                ClearAnnotations();
                 Invalidate();
             }
             else if (e.Button == MouseButtons.Right)
@@ -270,7 +256,7 @@ namespace RubickSnipper
                 {
                     _hasSelected = false;
                     _selectedRect = Rectangle.Empty;
-                    _annotations.Clear();
+                    ClearAnnotations();
                     Invalidate();
                 }
                 else
@@ -298,16 +284,14 @@ namespace RubickSnipper
                     _tempAnnotation = brush;
                     break;
                 case ToolType.Mosaic:
-                    _tempAnnotation = new MosaicAnnotation { Rect = new Rectangle(pt, new Size(0, 0)), MosaicSourceBmp = _mosaicBmp };
+                    _tempAnnotation = new MosaicAnnotation { Rect = new Rectangle(pt, new Size(0, 0)) };
                     break;
             }
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
-            _lastMousePos = e.Location;
-
-            // 悬停检测工具栏
+            // 悬停检测
             if (_hasSelected)
             {
                 ToolButton found = null;
@@ -373,11 +357,43 @@ namespace RubickSnipper
             }
             else if (_tempAnnotation != null)
             {
+                // 如果是马赛克，只对局部该小矩形生成一次马赛克位图（极小内存，毫秒级）
+                MosaicAnnotation ma = _tempAnnotation as MosaicAnnotation;
+                if (ma != null && ma.Rect.Width > 4 && ma.Rect.Height > 4)
+                {
+                    ma.MosaicSnippet = CreateLocalMosaic(_fullBmp, ma.Rect, 10);
+                }
+
                 _annotations.Add(_tempAnnotation);
                 _tempAnnotation = null;
                 Invalidate();
             }
             base.OnMouseUp(e);
+        }
+
+        private static Bitmap CreateLocalMosaic(Bitmap source, Rectangle rect, int blockSize)
+        {
+            Rectangle valid = Rectangle.Intersect(new Rectangle(0, 0, source.Width, source.Height), rect);
+            if (valid.Width <= 0 || valid.Height <= 0) return null;
+
+            int sw = Math.Max(1, valid.Width / blockSize);
+            int sh = Math.Max(1, valid.Height / blockSize);
+
+            Bitmap snippet = new Bitmap(valid.Width, valid.Height, PixelFormat.Format32bppArgb);
+            using (Bitmap small = new Bitmap(sw, sh, PixelFormat.Format32bppArgb))
+            {
+                using (Graphics gs = Graphics.FromImage(small))
+                {
+                    gs.InterpolationMode = InterpolationMode.NearestNeighbor;
+                    gs.DrawImage(source, new Rectangle(0, 0, sw, sh), valid, GraphicsUnit.Pixel);
+                }
+                using (Graphics gd = Graphics.FromImage(snippet))
+                {
+                    gd.InterpolationMode = InterpolationMode.NearestNeighbor;
+                    gd.DrawImage(small, 0, 0, valid.Width, valid.Height);
+                }
+            }
+            return snippet;
         }
 
         protected override void OnMouseDoubleClick(MouseEventArgs e)
@@ -407,7 +423,9 @@ namespace RubickSnipper
             {
                 if (_annotations.Count > 0)
                 {
-                    _annotations.RemoveAt(_annotations.Count - 1);
+                    int last = _annotations.Count - 1;
+                    _annotations[last].Dispose();
+                    _annotations.RemoveAt(last);
                     Invalidate();
                 }
             }
@@ -422,7 +440,6 @@ namespace RubickSnipper
             int btnSize = 32;
             int margin = 5;
 
-            // 定义图标按钮项 (对齐 Snipaste)
             var defs = new[]
             {
                 new { Id = "rect",   Tip = "矩形框", Tool = ToolType.Rect },
@@ -477,7 +494,14 @@ namespace RubickSnipper
                 }
                 else if (d.Id == "undo")
                 {
-                    act = delegate { if (_annotations.Count > 0) _annotations.RemoveAt(_annotations.Count - 1); };
+                    act = delegate {
+                        if (_annotations.Count > 0)
+                        {
+                            int last = _annotations.Count - 1;
+                            _annotations[last].Dispose();
+                            _annotations.RemoveAt(last);
+                        }
+                    };
                 }
                 else if (d.Id == "save")
                 {
@@ -503,22 +527,24 @@ namespace RubickSnipper
 
         private void SaveToFile()
         {
-            Bitmap result = GenerateFinalBitmap();
-            using (SaveFileDialog sfd = new SaveFileDialog())
+            using (Bitmap result = GenerateFinalBitmap())
             {
-                sfd.Filter = "PNG 图像|*.png|JPEG 图像|*.jpg";
-                sfd.FileName = "Screenshot_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png";
-                if (sfd.ShowDialog() == DialogResult.OK)
+                using (SaveFileDialog sfd = new SaveFileDialog())
                 {
-                    result.Save(sfd.FileName);
-                    ConfirmCrop();
+                    sfd.Filter = "PNG 图像|*.png|JPEG 图像|*.jpg";
+                    sfd.FileName = "Screenshot_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png";
+                    if (sfd.ShowDialog() == DialogResult.OK)
+                    {
+                        result.Save(sfd.FileName);
+                        ConfirmCrop();
+                    }
                 }
             }
         }
 
         private Bitmap GenerateFinalBitmap()
         {
-            Bitmap cropped = new Bitmap(_selectedRect.Width, _selectedRect.Height);
+            Bitmap cropped = new Bitmap(_selectedRect.Width, _selectedRect.Height, PixelFormat.Format32bppArgb);
             using (Graphics g = Graphics.FromImage(cropped))
             {
                 g.DrawImage(_fullBmp,
@@ -560,47 +586,59 @@ namespace RubickSnipper
         {
             Graphics g = e.Graphics;
 
-            // 1. 极速渲染：直接绘制预处理好的暗化底图（毫秒级，零运算）
-            g.DrawImageUnscaled(_darkBmp, 0, 0);
+            // 1. 绘制高清物理底图 (单次内存复用)
+            g.DrawImageUnscaled(_fullBmp, 0, 0);
 
-            // 2. 选区内部直接贴回高清原图
+            // 2. 【核心优化：四矩形几何遮罩法】
+            // 彻底去除 Region 运算和第二张底图，零内存消耗，毫秒级直接绘制 4 个纯色矩形包围选区！
+            if (_isSelecting || _hasSelected)
+            {
+                Rectangle r = _selectedRect;
+                // 上
+                if (r.Top > 0) g.FillRectangle(_maskBrush, 0, 0, this.Width, r.Top);
+                // 下
+                if (this.Height > r.Bottom) g.FillRectangle(_maskBrush, 0, r.Bottom, this.Width, this.Height - r.Bottom);
+                // 左
+                if (r.Left > 0 && r.Height > 0) g.FillRectangle(_maskBrush, 0, r.Top, r.Left, r.Height);
+                // 右
+                if (this.Width > r.Right && r.Height > 0) g.FillRectangle(_maskBrush, r.Right, r.Top, this.Width - r.Right, r.Height);
+            }
+            else
+            {
+                g.FillRectangle(_maskBrush, 0, 0, this.Width, this.Height);
+            }
+
+            // 3. 绘制所有标注内容
+            foreach (AnnotationItem ann in _annotations)
+            {
+                ann.Draw(g);
+            }
+            if (_tempAnnotation != null)
+            {
+                _tempAnnotation.Draw(g);
+            }
+
+            // 4. 选区边框与控制点
             if ((_isSelecting || _hasSelected) && _selectedRect.Width > 0 && _selectedRect.Height > 0)
             {
-                g.DrawImage(_fullBmp, _selectedRect, _selectedRect, GraphicsUnit.Pixel);
-
-                // 3. 绘制标注
-                foreach (AnnotationItem ann in _annotations)
-                {
-                    ann.Draw(g);
-                }
-                if (_tempAnnotation != null)
-                {
-                    _tempAnnotation.Draw(g);
-                }
-
-                // 4. 选区边框（Snipaste 浅蓝精细虚线+控制点）
-                using (Pen borderPen = new Pen(Color.FromArgb(59, 130, 246), 2))
-                {
-                    g.DrawRectangle(borderPen, _selectedRect);
-                }
+                g.DrawRectangle(_borderPen, _selectedRect);
                 DrawHandlePoints(g, _selectedRect);
 
-                // 5. 尺寸标签
+                // 尺寸提示
                 string tip = string.Format("{0} × {1} px", _selectedRect.Width, _selectedRect.Height);
-                using (Font font = new Font("Segoe UI", 9f, FontStyle.Bold))
+                SizeF size = g.MeasureString(tip, _tipFont);
+                float tipY = _selectedRect.Top - size.Height - 8;
+                if (tipY < 4) tipY = _selectedRect.Top + 6;
+                float tipX = Math.Max(4, _selectedRect.Left);
+
                 using (SolidBrush bgBrush = new SolidBrush(Color.FromArgb(220, 15, 23, 42)))
                 using (SolidBrush textBrush = new SolidBrush(Color.White))
                 {
-                    SizeF size = g.MeasureString(tip, font);
-                    float tipY = _selectedRect.Top - size.Height - 8;
-                    if (tipY < 4) tipY = _selectedRect.Top + 6;
-                    float tipX = Math.Max(4, _selectedRect.Left);
-
                     g.FillRectangle(bgBrush, tipX, tipY, size.Width + 10, size.Height + 4);
-                    g.DrawString(tip, font, textBrush, tipX + 5, tipY + 2);
+                    g.DrawString(tip, _tipFont, textBrush, tipX + 5, tipY + 2);
                 }
 
-                // 6. Snipaste 风格图标工具栏
+                // 5. 绘制 Snipaste 风格图标工具栏
                 if (_hasSelected && _toolButtons.Count > 0)
                 {
                     DrawToolBar(g);
@@ -609,16 +647,15 @@ namespace RubickSnipper
             else if (!_isSelecting && !_hasSelected)
             {
                 string guide = "请按住鼠标左键拖拽框选区域 (按 Esc 取消)";
-                using (Font font = new Font("Microsoft YaHei", 12f, FontStyle.Bold))
+                SizeF size = g.MeasureString(guide, _uiFont);
+                float tipX = (this.Width - size.Width) / 2;
+                float tipY = (this.Height - size.Height) / 2;
+
                 using (SolidBrush bgBrush = new SolidBrush(Color.FromArgb(220, 15, 23, 42)))
                 using (SolidBrush textBrush = new SolidBrush(Color.White))
                 {
-                    SizeF size = g.MeasureString(guide, font);
-                    float tipX = (this.Width - size.Width) / 2;
-                    float tipY = (this.Height - size.Height) / 2;
-
                     g.FillRectangle(bgBrush, tipX - 14, tipY - 10, size.Width + 28, size.Height + 20);
-                    g.DrawString(guide, font, textBrush, tipX, tipY);
+                    g.DrawString(guide, _uiFont, textBrush, tipX, tipY);
                 }
             }
         }
@@ -659,7 +696,6 @@ namespace RubickSnipper
                 _toolButtons[0].Bounds.Height + 8
             );
 
-            // 绘制工具栏圆角背景底板与轻微投影
             using (SolidBrush bg = new SolidBrush(Color.FromArgb(250, 255, 255, 255)))
             using (Pen border = new Pen(Color.FromArgb(203, 213, 225), 1))
             {
@@ -667,12 +703,10 @@ namespace RubickSnipper
                 g.DrawRectangle(border, barRect);
             }
 
-            // 遍历绘制图标按钮
             foreach (ToolButton btn in _toolButtons)
             {
                 if (btn.Id.StartsWith("sep"))
                 {
-                    // 分割线
                     using (Pen sp = new Pen(Color.FromArgb(226, 232, 240), 1))
                     {
                         int mx = btn.Bounds.Left + btn.Bounds.Width / 2;
@@ -693,29 +727,26 @@ namespace RubickSnipper
                     }
                 }
 
-                // 绘制矢量图标
                 Color iconColor = isActive ? Color.FromArgb(37, 99, 235) : Color.FromArgb(71, 85, 105);
                 DrawVectorIcon(g, btn.Id, btn.Bounds, iconColor);
             }
 
-            // 绘制悬停气泡提示
             if (_hoveredBtn != null && !string.IsNullOrEmpty(_hoveredBtn.Tooltip))
             {
-                using (Font tipFont = new Font("Microsoft YaHei", 8.5f))
+                using (Font tipF = new Font("Microsoft YaHei", 8.5f))
                 using (SolidBrush tipBg = new SolidBrush(Color.FromArgb(220, 15, 23, 42)))
                 using (SolidBrush tipText = new SolidBrush(Color.White))
                 {
-                    SizeF sz = g.MeasureString(_hoveredBtn.Tooltip, tipFont);
+                    SizeF sz = g.MeasureString(_hoveredBtn.Tooltip, tipF);
                     float tx = _hoveredBtn.Bounds.Left + (_hoveredBtn.Bounds.Width - sz.Width) / 2;
                     float ty = barRect.Top - sz.Height - 6;
 
                     g.FillRectangle(tipBg, tx - 4, ty - 2, sz.Width + 8, sz.Height + 4);
-                    g.DrawString(_hoveredBtn.Tooltip, tipFont, tipText, tx, ty);
+                    g.DrawString(_hoveredBtn.Tooltip, tipF, tipText, tx, ty);
                 }
             }
         }
 
-        // 精致矢量图标绘制函数
         private void DrawVectorIcon(Graphics g, string id, Rectangle r, Color color)
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -730,30 +761,23 @@ namespace RubickSnipper
                 switch (id)
                 {
                     case "rect":
-                        // 矩形图标
                         g.DrawRectangle(p, cx - 8, cy - 7, 16, 14);
                         break;
-
                     case "arrow":
-                        // 箭头图标
                         using (AdjustableArrowCap cap = new AdjustableArrowCap(4, 4, true))
                         {
                             p.CustomEndCap = cap;
                             g.DrawLine(p, cx - 7, cy + 6, cx + 6, cy - 7);
                         }
                         break;
-
                     case "brush":
-                        // 画笔图标 (斜向线条+笔头)
                         g.DrawLine(p, cx - 6, cy + 6, cx + 5, cy - 5);
                         using (SolidBrush b = new SolidBrush(color))
                         {
                             g.FillEllipse(b, cx + 3, cy - 8, 5, 5);
                         }
                         break;
-
                     case "mosaic":
-                        // 马赛克图标 (网格像素)
                         using (SolidBrush b = new SolidBrush(color))
                         {
                             g.FillRectangle(b, cx - 7, cy - 7, 6, 6);
@@ -762,16 +786,12 @@ namespace RubickSnipper
                             g.FillRectangle(b, cx + 1, cy + 1, 6, 6);
                         }
                         break;
-
                     case "undo":
-                        // 撤销图标 (弧形箭头)
                         g.DrawArc(p, cx - 8, cy - 6, 15, 13, 0, -210);
                         g.DrawLine(p, cx - 8, cy - 2, cx - 8, cy + 4);
                         g.DrawLine(p, cx - 8, cy - 2, cx - 2, cy - 2);
                         break;
-
                     case "save":
-                        // 磁盘保存图标
                         g.DrawRectangle(p, cx - 7, cy - 7, 14, 14);
                         using (SolidBrush b = new SolidBrush(color))
                         {
@@ -779,18 +799,14 @@ namespace RubickSnipper
                             g.FillRectangle(b, cx - 4, cy + 1, 8, 4);
                         }
                         break;
-
                     case "copy":
-                        // 复制图标 (双层卡片)
                         g.DrawRectangle(p, cx - 4, cy - 7, 11, 11);
                         using (Pen p2 = new Pen(color, 1.5f))
                         {
                             g.DrawRectangle(p2, cx - 7, cy - 4, 11, 11);
                         }
                         break;
-
                     case "ok":
-                        // 确认/完成图标 (醒目绿色对勾)
                         using (Pen okPen = new Pen(Color.FromArgb(16, 185, 129), 2.5f))
                         {
                             okPen.StartCap = LineCap.Round;
@@ -803,12 +819,29 @@ namespace RubickSnipper
             }
         }
 
+        private void ClearAnnotations()
+        {
+            foreach (var ann in _annotations)
+            {
+                ann.Dispose();
+            }
+            _annotations.Clear();
+            if (_tempAnnotation != null)
+            {
+                _tempAnnotation.Dispose();
+                _tempAnnotation = null;
+            }
+        }
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
-                if (_darkBmp != null) _darkBmp.Dispose();
-                if (_mosaicBmp != null) _mosaicBmp.Dispose();
+                ClearAnnotations();
+                _maskBrush.Dispose();
+                _borderPen.Dispose();
+                _uiFont.Dispose();
+                _tipFont.Dispose();
             }
             base.Dispose(disposing);
         }

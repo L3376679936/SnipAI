@@ -51,9 +51,40 @@ function updateCharCount() {
   sourceCharCount.textContent = `${len} 字`;
 }
 
+// 针对高分辨率屏幕进行自适应内存优化压缩，防止大图占用巨量内存引起卡顿
+function compressImageIfNeeded(base64Data, maxWidth = 1920, maxHeight = 1080) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let width = img.naturalWidth || img.width;
+      let height = img.naturalHeight || img.height;
+      if (width <= maxWidth && height <= maxHeight) {
+        resolve(base64Data);
+        return;
+      }
+      const ratio = Math.min(maxWidth / width, maxHeight / height);
+      const targetW = Math.round(width * ratio);
+      const targetH = Math.round(height * ratio);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = targetW;
+      canvas.height = targetH;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, targetW, targetH);
+      const compressed = canvas.toDataURL('image/jpeg', 0.88);
+      canvas.width = 0;
+      canvas.height = 0;
+      resolve(compressed);
+    };
+    img.onerror = () => resolve(base64Data);
+    img.src = base64Data;
+  });
+}
+
 // 核心：处理新图片（来自截图或剪贴板）
-async function handleNewImage(base64Data) {
-  if (!base64Data) return;
+async function handleNewImage(rawBase64) {
+  if (!rawBase64) return;
+  const base64Data = await compressImageIfNeeded(rawBase64);
   currentImageBase64 = base64Data;
 
   // 1. 界面更新
