@@ -1,7 +1,347 @@
-import { configManager, runVisionOcr, runTranslate, runFastVisionOcrAndTranslate, testApiConnection } from './llmClient.js';
-import { ScreenCaptureManager } from './capture.js';
+// 全局错误捕获，直接写入系统调试日志
+window.onerror = function (msg, url, lineNo, columnNo, error) {
+  if (window.nativeBridge && window.nativeBridge.log) {
+    window.nativeBridge.log(`[JS Error] ${msg} at ${lineNo}:${columnNo}`);
+  }
+};
+window.onunhandledrejection = function (event) {
+  if (window.nativeBridge && window.nativeBridge.log) {
+    window.nativeBridge.log(`[Promise Rejection] ${event.reason}`);
+  }
+};
 
-// DOM 元素引用
+if (window.nativeBridge && window.nativeBridge.log) {
+  window.nativeBridge.log('>>> app.js 开始加载执行 (无 CORS 模块模式)');
+}
+
+/**
+ * 1. 屏幕截图管理器
+ */
+class ScreenCaptureManager {
+  constructor({ onComplete, onCancel }) {
+    this.onComplete = onComplete;
+    this.onCancel = onCancel;
+    this.isCapturing = false;
+  }
+
+  async startCapture() {
+    if (this.isCapturing) {
+      if (window.nativeBridge && window.nativeBridge.log) {
+        window.nativeBridge.log('startCapture: 正在截图中，跳过重复请求');
+      }
+      return;
+    }
+    this.isCapturing = true;
+
+    try {
+      if (window.nativeBridge && window.nativeBridge.captureScreen) {
+        if (window.nativeBridge && window.nativeBridge.log) {
+          window.nativeBridge.log('调用 window.nativeBridge.captureScreen()');
+        }
+        const base64Data = await window.nativeBridge.captureScreen();
+        this.isCapturing = false;
+        if (this.onComplete) {
+          this.onComplete(base64Data);
+        }
+      } else {
+        throw new Error('当前环境未提供截图接口');
+      }
+    } catch (err) {
+      this.isCapturing = false;
+      if (window.nativeBridge && window.nativeBridge.showMainWindow) {
+        window.nativeBridge.showMainWindow();
+      }
+      if (window.nativeBridge && window.nativeBridge.log) {
+        window.nativeBridge.log(`截图取消或失败: ${err.message}`);
+      }
+      if (this.onCancel) {
+        this.onCancel(err.message);
+      }
+    }
+  }
+}
+
+/**
+ * 2. 大模型配置与通信管理器
+ */
+const DEFAULT_CONFIG = {
+  baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  apiKey: '',
+  visionModel: 'qwen-vl-max',
+  translateModel: 'qwen-turbo',
+  customOcrPrompt: '请仔细识别并提取这张图片中的所有文字。严格保持原有的段落排版和顺序。若含有代码或公式请完整保留。请直接输出提取出的文本内容，严禁输出任何问候语、说明、解释或附加符号。',
+  customTranslatePrompt: '你是一位精通多国语言的高级专业翻译官。请将输入的内容准确、地道、优雅地翻译成目标语言，语言通顺，语义精准，保持原有换行格式，直接输出译文，不要包含任何多余解释。'
+};
+
+const STORAGE_KEY = 'rubick_ai_ocr_settings_v1';
+
+const configManager = {
+  get: () => {
+    if (window.nativeBridge && typeof window.nativeBridge.loadConfig === 'function') {
+      const fileCfg = window.nativeBridge.loadConfig();
+      if (fileCfg && typeof fileCfg === 'object') {
+        return { ...DEFAULT_CONFIG, ...fileCfg };
+      }
+    }
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        return { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
+      }
+    } catch (e) {}
+    return { ...DEFAULT_CONFIG };
+  },
+
+  save: (newConfig) => {
+    if (window.nativeBridge && typeof window.nativeBridge.saveConfig === 'function') {
+      window.nativeBridge.saveConfig(newConfig);
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(newConfig));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+};
+
+/**
+ * 通用 SSE 流式解析器
+ */
+async function streamFetch(url, options, onChunk, onEnd, onError) {
+  try {
+    const response = await fetch(url, options);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMsg = `HTTP 错误 ${response.status}: ${response.statusText}`;
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorMsg = errorJson.error?.message || errorJson.message || errorMsg;
+      } catch (e) {}
+      throw new Error(errorMsg);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith(':')) continue;
+
+        if (trimmed.startsWith('data:')) {
+          const jsonStr = trimmed.replace(/^data:\s*/, '').trim();
+          if (jsonStr === '[DONE]') {
+            onEnd && onEnd();
+            return;
+          }
+
+          try {
+            const data = JSON.parse(jsonStr);
+            const delta = data.choices?.[0]?.delta?.content || '';
+            if (delta) {
+              onChunk && onChunk(delta);
+            }
+          } catch (jsonErr) {
+            // 忽略非标准 chunk
+          }
+        }
+      }
+    }
+
+    onEnd && onEnd();
+  } catch (err) {
+    if (window.nativeBridge && window.nativeBridge.log) {
+      window.nativeBridge.log(`streamFetch 出错: ${err.message}`);
+    }
+    onError && onError(err);
+  }
+}
+
+/**
+ * 极速一站式：单次多模态请求同步获取提取原文与目标语言译文
+ */
+async function runFastVisionOcrAndTranslate({
+  base64Image,
+  targetLang,
+  onOriginalChunk,
+  onTranslateChunk,
+  onEnd,
+  onError
+}) {
+  const config = configManager.get();
+  if (!config.apiKey) {
+    onError && onError(new Error('请先在设置中填写 API Key！'));
+    return;
+  }
+
+  const endpoint = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+
+  const fastPrompt = `请仔细识别图片中的文字，并将其精准翻译为【${targetLang}】。
+严格遵守以下标记格式输出，严禁输出任何多余的开场白或解释：
+<<<ORIGINAL>>>
+(在此输出识别提取出的原文，保持原有换行格式)
+<<<TRANSLATED>>>
+(在此输出翻译后的${targetLang}译文)`;
+
+  const payload = {
+    model: config.visionModel || 'qwen-vl-max',
+    stream: true,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: fastPrompt
+          },
+          {
+            type: 'image_url',
+            image_url: {
+              url: base64Image
+            }
+          }
+        ]
+      }
+    ]
+  };
+
+  let mode = 'pre';
+  let rawBuffer = '';
+
+  await streamFetch(
+    endpoint,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`
+      },
+      body: JSON.stringify(payload)
+    },
+    (delta) => {
+      rawBuffer += delta;
+
+      if (mode === 'pre') {
+        const origIdx = rawBuffer.indexOf('<<<ORIGINAL>>>');
+        if (origIdx !== -1) {
+          mode = 'original';
+          rawBuffer = rawBuffer.substring(origIdx + '<<<ORIGINAL>>>'.length).replace(/^\s+/, '');
+          if (rawBuffer) onOriginalChunk(rawBuffer);
+        }
+      } else if (mode === 'original') {
+        const transIdx = rawBuffer.indexOf('<<<TRANSLATED>>>');
+        if (transIdx !== -1) {
+          mode = 'translated';
+          rawBuffer = rawBuffer.substring(transIdx + '<<<TRANSLATED>>>'.length).replace(/^\s+/, '');
+          if (rawBuffer) onTranslateChunk(rawBuffer);
+        } else {
+          onOriginalChunk(delta);
+        }
+      } else if (mode === 'translated') {
+        onTranslateChunk(delta);
+      }
+    },
+    onEnd,
+    onError
+  );
+}
+
+/**
+ * 纯文本流式重译
+ */
+async function runTranslate({ text, targetLang, onChunk, onEnd, onError }) {
+  const config = configManager.get();
+  if (!config.apiKey) {
+    onError && onError(new Error('请先在设置中填写 API Key！'));
+    return;
+  }
+  if (!text.trim()) {
+    onError && onError(new Error('翻译内容不能为空'));
+    return;
+  }
+
+  const endpoint = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+
+  const payload = {
+    model: config.translateModel || 'qwen-turbo',
+    stream: true,
+    messages: [
+      {
+        role: 'system',
+        content: config.customTranslatePrompt || DEFAULT_CONFIG.customTranslatePrompt
+      },
+      {
+        role: 'user',
+        content: `请将以下内容翻译为【${targetLang}】：\n\n${text}`
+      }
+    ]
+  };
+
+  await streamFetch(
+    endpoint,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`
+      },
+      body: JSON.stringify(payload)
+    },
+    onChunk,
+    onEnd,
+    onError
+  );
+}
+
+/**
+ * 测试 API 连通性
+ */
+async function testApiConnection(customCfg) {
+  const cfg = customCfg || configManager.get();
+  if (!cfg.apiKey) {
+    throw new Error('API Key 不能为空');
+  }
+
+  const endpoint = `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${cfg.apiKey}`
+    },
+    body: JSON.stringify({
+      model: cfg.translateModel || cfg.visionModel || 'qwen-turbo',
+      messages: [{ role: 'user', content: 'Hi, please reply with OK.' }],
+      max_tokens: 10
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let msg = `连接失败 (HTTP ${response.status})`;
+    try {
+      const errJson = JSON.parse(errorText);
+      msg = errJson.error?.message || errJson.message || msg;
+    } catch (e) {}
+    throw new Error(msg);
+  }
+
+  return true;
+}
+
+/**
+ * 3. 前端交互与状态管理
+ */
 const btnCapture = document.getElementById('btnCapture');
 const btnPaste = document.getElementById('btnPaste');
 const btnSettings = document.getElementById('btnSettings');
@@ -20,7 +360,6 @@ const thumbWrap = document.getElementById('thumbWrap');
 const thumbImg = document.getElementById('thumbImg');
 const emptyGuide = document.getElementById('emptyGuide');
 
-// 模态框相关
 const settingsModal = document.getElementById('settingsModal');
 const btnCloseSettings = document.getElementById('btnCloseSettings');
 const btnCancelSettings = document.getElementById('btnCancelSettings');
@@ -38,20 +377,17 @@ let currentImageBase64 = null;
 let isTranslating = false;
 let isOcring = false;
 
-// 提示工具
 function showToast(msg, duration = 2000) {
   toastBar.textContent = msg;
   toastBar.classList.add('show');
   setTimeout(() => toastBar.classList.remove('show'), duration);
 }
 
-// 更新字数统计
 function updateCharCount() {
   const len = sourceEditor.value.length;
   sourceCharCount.textContent = `${len} 字`;
 }
 
-// 针对高分辨率屏幕进行自适应内存与极速传输压缩 (1200px 黄金尺寸，Vision Token 锐减 70%，首字极速返回)
 function compressImageIfNeeded(base64Data, maxWidth = 1200, maxHeight = 800) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -81,13 +417,11 @@ function compressImageIfNeeded(base64Data, maxWidth = 1200, maxHeight = 800) {
   });
 }
 
-// 核心：处理新图片（来自截图或剪贴板）
 async function handleNewImage(rawBase64) {
   if (!rawBase64) return;
   const base64Data = await compressImageIfNeeded(rawBase64);
   currentImageBase64 = base64Data;
 
-  // 1. 界面更新
   emptyGuide.style.display = 'none';
   thumbWrap.style.display = 'flex';
   thumbImg.src = base64Data;
@@ -97,15 +431,13 @@ async function handleNewImage(rawBase64) {
 
   const cfg = configManager.get();
   if (!cfg.apiKey) {
-    showToast('请先在弹窗中配置 API Key 后保存');
+    showToast('请先配置 API Key');
     openSettings();
     return;
   }
 
-  // 读取当前目标语言（默认简体中文）
   const targetLang = selectTargetLang.value || '简体中文';
 
-  // 2. 触发一站式极速 OCR 与同步流式翻译（提速 2~3 倍）
   isOcring = true;
   isTranslating = true;
   sourceEditor.placeholder = '大模型正在极速识别提取文字...';
@@ -144,7 +476,6 @@ async function handleNewImage(rawBase64) {
   });
 }
 
-// 核心：执行文本翻译
 async function triggerTranslation(textToTranslate) {
   const text = textToTranslate || sourceEditor.value;
   if (!text || !text.trim()) {
@@ -178,7 +509,6 @@ async function triggerTranslation(textToTranslate) {
   });
 }
 
-// 初始化截图器
 const captureManager = new ScreenCaptureManager({
   onComplete: (base64) => {
     handleNewImage(base64);
@@ -188,10 +518,8 @@ const captureManager = new ScreenCaptureManager({
   }
 });
 
-// 从剪贴板读取图片
 async function pasteImageFromClipboard() {
   try {
-    // 1. 优先使用 Electron 原生剪贴板 API（无权限弹窗，瞬间读取）
     if (window.nativeBridge && window.nativeBridge.readClipboardImage) {
       const nativeImg = window.nativeBridge.readClipboardImage();
       if (nativeImg) {
@@ -200,34 +528,12 @@ async function pasteImageFromClipboard() {
         return;
       }
     }
-
-    // 2. 网页 API 兜底
-    if (navigator.clipboard && navigator.clipboard.read) {
-      const clipboardItems = await navigator.clipboard.read();
-      for (const item of clipboardItems) {
-        for (const type of item.types) {
-          if (type.startsWith('image/')) {
-            const blob = await item.getType(type);
-            const reader = new FileReader();
-            reader.onload = (e) => {
-              handleNewImage(e.target.result);
-              showToast('已从剪贴板载入图片');
-            };
-            reader.readAsDataURL(blob);
-            return;
-          }
-        }
-      }
-    }
-
-    showToast('剪贴板中未检测到图片，请先复制或截图');
+    showToast('剪贴板中未检测到图片');
   } catch (err) {
-    console.warn('读取剪贴板失败:', err);
     showToast('无法读取剪贴板图片');
   }
 }
 
-// 设置抽屉控制
 function openSettings() {
   const cfg = configManager.get();
   cfgBaseUrl.value = cfg.baseUrl || '';
@@ -264,7 +570,6 @@ function saveSettings() {
   }
 }
 
-// 预设快速填充
 const PRESETS = {
   dashscope: {
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -300,7 +605,6 @@ document.querySelectorAll('.tag-btn').forEach((btn) => {
   });
 });
 
-// 事件绑定
 btnCapture.addEventListener('click', () => captureManager.startCapture());
 btnPaste.addEventListener('click', () => pasteImageFromClipboard());
 btnSettings.addEventListener('click', openSettings);
@@ -308,7 +612,6 @@ btnCloseSettings.addEventListener('click', closeSettings);
 btnCancelSettings.addEventListener('click', closeSettings);
 btnSaveSettings.addEventListener('click', saveSettings);
 
-// 连通性测试
 btnTestConn.addEventListener('click', async () => {
   testConnResult.style.color = '#3b82f6';
   testConnResult.textContent = '测试中...';
@@ -328,7 +631,6 @@ btnTestConn.addEventListener('click', async () => {
   }
 });
 
-// 复制与清空
 btnCopySource.addEventListener('click', () => {
   const val = sourceEditor.value;
   if (!val) return;
@@ -362,11 +664,9 @@ btnClearSource.addEventListener('click', () => {
   showToast('已清空');
 });
 
-// 原文输入监听与快捷键
 sourceEditor.addEventListener('input', updateCharCount);
 
 sourceEditor.addEventListener('keydown', (e) => {
-  // Ctrl + Enter 触发翻译
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault();
     triggerTranslation();
@@ -375,7 +675,6 @@ sourceEditor.addEventListener('keydown', (e) => {
 
 btnTranslateAction.addEventListener('click', () => triggerTranslation());
 
-// 支持在窗口内直接按 Ctrl+V 粘贴截图识别
 window.addEventListener('paste', (e) => {
   const items = e.clipboardData?.items;
   if (!items) return;
@@ -394,60 +693,60 @@ window.addEventListener('paste', (e) => {
   }
 });
 
-// 支持在窗口内直接按 Ctrl+R 强制刷新重载页面
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r') {
     location.reload();
   }
 });
 
-// 默认设置适宜高度
 if (window.nativeBridge && window.nativeBridge.setHeight) {
   window.nativeBridge.setHeight(600);
 }
 
-// 自动截图启动状态机
+/**
+ * 自动截屏状态机与宿主事件监听
+ */
 let hasAutoTriggeredCapture = false;
 
 function triggerAutoCaptureIfEmpty(source) {
   if (window.nativeBridge && window.nativeBridge.log) {
-    window.nativeBridge.log(`triggerAutoCaptureIfEmpty 收到触发来源: ${source}, hasAutoTriggeredCapture=${hasAutoTriggeredCapture}, hasImage=${!!currentImageBase64}`);
+    window.nativeBridge.log(`triggerAutoCaptureIfEmpty: 来源=${source}, autoTriggered=${hasAutoTriggeredCapture}, hasImage=${!!currentImageBase64}`);
   }
   if (hasAutoTriggeredCapture) return;
   if (!currentImageBase64) {
     hasAutoTriggeredCapture = true;
     if (window.nativeBridge && window.nativeBridge.log) {
-      window.nativeBridge.log('准备延时 100ms 唤起 captureManager.startCapture()');
+      window.nativeBridge.log('>>> 立即触发 captureManager.startCapture() <<<');
     }
     setTimeout(() => {
       captureManager.startCapture();
-    }, 100);
+    }, 120);
   }
 }
 
-// 1. 监听 Rubick / uTools 宿主激活
+// 1. 注册宿主激活监听
 if (window.nativeBridge && window.nativeBridge.onPluginEnter) {
   window.nativeBridge.onPluginEnter((action) => {
     if (window.nativeBridge && window.nativeBridge.log) {
-      window.nativeBridge.log(`app.js 收到 onPluginEnter 回调: ${JSON.stringify(action)}`);
+      window.nativeBridge.log(`app.js 收到 onPluginEnter 事件: ${JSON.stringify(action)}`);
     }
     window.nativeBridge.setHeight(600);
 
-    // 如果通过复制外部图片呼出，直接提取
     if (action && action.type === 'img' && action.payload) {
       hasAutoTriggeredCapture = true;
       handleNewImage(action.payload);
       return;
     }
 
-    // 关键字呼出且无图，直接进入截图状态！
     triggerAutoCaptureIfEmpty('onPluginEnter');
   });
 }
 
-// 2. 首屏加载兜底：打开插件无图时自动进入截图模式
+// 2. 页面就绪后兜底自检（无图自动唤醒截图）
 setTimeout(() => {
-  triggerAutoCaptureIfEmpty('DOMContentLoaded/Timeout');
+  triggerAutoCaptureIfEmpty('PageReadyTimeout');
 }, 200);
 
-
+if (window.nativeBridge && window.nativeBridge.log) {
+  window.nativeBridge.log('<<< app.js 初始化绑定完成 >>>');
+}
