@@ -1691,6 +1691,48 @@ namespace RubickSnipper
                 if (this.Height > r.Bottom) g.FillRectangle(_maskBrush, 0, r.Bottom, this.Width, this.Height - r.Bottom);
                 if (r.Left > 0 && r.Height > 0) g.FillRectangle(_maskBrush, 0, r.Top, r.Left, r.Height);
                 if (this.Width > r.Right && r.Height > 0) g.FillRectangle(_maskBrush, r.Right, r.Top, this.Width - r.Right, r.Height);
+
+                // 全程绘制高对比度鲜明边框线 (无论正在拖拽拉框还是已框选完毕)
+                if (r.Width > 0 && r.Height > 0)
+                {
+                    using (Pen outerPen = new Pen(Color.FromArgb(2, 132, 199), 2f)) // 鲜艳天空蓝
+                    {
+                        g.DrawRectangle(outerPen, r);
+                    }
+                    using (Pen innerPen = new Pen(Color.FromArgb(160, 255, 255, 255), 1f)) // 内侧微光白描边
+                    {
+                        Rectangle inner = new Rectangle(r.X + 1, r.Y + 1, Math.Max(0, r.Width - 2), Math.Max(0, r.Height - 2));
+                        g.DrawRectangle(innerPen, inner);
+                    }
+
+                    // 实时浮动尺寸胶囊提示 (宽 × 高 像素)
+                    if (r.Width > 20 && r.Height > 15)
+                    {
+                        string sizeTip = string.Format("{0} × {1}", r.Width, r.Height);
+                        using (Font tipFont = new Font("Segoe UI", 9f, FontStyle.Bold))
+                        {
+                            SizeF tipSize = g.MeasureString(sizeTip, tipFont);
+                            int tipH = (int)tipSize.Height + 6;
+                            int tipW = (int)tipSize.Width + 14;
+
+                            int tipX = r.Left;
+                            if (tipX + tipW > this.Width - 4) tipX = this.Width - tipW - 4;
+                            if (tipX < 4) tipX = 4;
+
+                            int tipY = r.Top - tipH - 4;
+                            if (tipY < 4) tipY = r.Top + 6; // 靠顶时向内贴合
+
+                            Rectangle tipRect = new Rectangle(tipX, tipY, tipW, tipH);
+                            using (GraphicsPath tipPath = CreateRoundedRectanglePath(tipRect, 3))
+                            using (SolidBrush tipBg = new SolidBrush(Color.FromArgb(230, 15, 23, 42)))
+                            using (SolidBrush tipText = new SolidBrush(Color.White))
+                            {
+                                g.FillPath(tipBg, tipPath);
+                                g.DrawString(sizeTip, tipFont, tipText, tipX + 7, tipY + 3);
+                            }
+                        }
+                    }
+                }
             }
             else
             {
@@ -1708,7 +1750,6 @@ namespace RubickSnipper
 
             if (_hasSelected)
             {
-                g.DrawRectangle(_borderPen, _selectedRect);
                 DrawHandlePoints(g, _selectedRect);
 
                 DrawToolBar(g);
