@@ -51,6 +51,36 @@ window.nativeBridge = {
   },
 
   /**
+   * 持久化保存历史识别记录到本地磁盘 (最多保存 30 条)
+   */
+  saveHistory: (list) => {
+    try {
+      const histPath = path.join(os.homedir(), '.rubick_ocr_translate_history.json');
+      fs.writeFileSync(histPath, JSON.stringify(list || [], null, 2), 'utf-8');
+      return true;
+    } catch (err) {
+      logDebug(`写入历史记录失败: ${err.message}`);
+      return false;
+    }
+  },
+
+  /**
+   * 从本地磁盘读取历史识别记录
+   */
+  loadHistory: () => {
+    try {
+      const histPath = path.join(os.homedir(), '.rubick_ocr_translate_history.json');
+      if (fs.existsSync(histPath)) {
+        const text = fs.readFileSync(histPath, 'utf-8');
+        return JSON.parse(text);
+      }
+    } catch (err) {
+      logDebug(`读取历史记录失败: ${err.message}`);
+    }
+    return [];
+  },
+
+  /**
    * 唤起项目内置编译的轻量全屏选区截屏器 (bin/snipper.exe)
    */
   captureScreen: () => {

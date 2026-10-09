@@ -345,10 +345,55 @@ async function testApiConnection(customCfg) {
 }
 
 /**
- * 3. 前端交互与状态管理
+ * 3. 历史记录持久化管理器
+ */
+const historyManager = {
+  getAll: () => {
+    if (window.nativeBridge && typeof window.nativeBridge.loadHistory === 'function') {
+      const list = window.nativeBridge.loadHistory();
+      if (Array.isArray(list)) return list;
+    }
+    try {
+      const saved = localStorage.getItem('rubick_ai_ocr_history_v1');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return [];
+  },
+
+  saveAll: (list) => {
+    if (window.nativeBridge && typeof window.nativeBridge.saveHistory === 'function') {
+      window.nativeBridge.saveHistory(list);
+    }
+    try {
+      localStorage.setItem('rubick_ai_ocr_history_v1', JSON.stringify(list));
+    } catch (e) {}
+  },
+
+  add: (item) => {
+    const list = historyManager.getAll();
+    const filtered = list.filter(h => h.id !== item.id);
+    filtered.unshift(item);
+    const trimmed = filtered.slice(0, 30); // 最多保留 30 条历史
+    historyManager.saveAll(trimmed);
+  },
+
+  delete: (id) => {
+    const list = historyManager.getAll();
+    const updated = list.filter(h => h.id !== id);
+    historyManager.saveAll(updated);
+  },
+
+  clear: () => {
+    historyManager.saveAll([]);
+  }
+};
+
+/**
+ * 4. 前端交互与状态管理
  */
 const btnCapture = document.getElementById('btnCapture');
 const btnPaste = document.getElementById('btnPaste');
+const btnHistory = document.getElementById('btnHistory');
 const btnSettings = document.getElementById('btnSettings');
 const btnCopySource = document.getElementById('btnCopySource');
 const btnClearSource = document.getElementById('btnClearSource');
@@ -371,6 +416,11 @@ const btnCancelSettings = document.getElementById('btnCancelSettings');
 const btnSaveSettings = document.getElementById('btnSaveSettings');
 const btnTestConn = document.getElementById('btnTestConn');
 const testConnResult = document.getElementById('testConnResult');
+
+const historyDrawer = document.getElementById('historyDrawer');
+const btnCloseHistory = document.getElementById('btnCloseHistory');
+const btnClearAllHistory = document.getElementById('btnClearAllHistory');
+const historyListContainer = document.getElementById('historyListContainer');
 
 const cfgBaseUrl = document.getElementById('cfgBaseUrl');
 const cfgApiKey = document.getElementById('cfgApiKey');
@@ -472,14 +522,29 @@ async function handleNewImage(rawBase64) {
       transStatusTip.textContent = `翻译中...`;
     },
     onEnd: () => {
-      sourceEditor.value = cleanMarkers(sourceEditor.value);
-      translationView.textContent = cleanMarkers(translationView.textContent);
+      const finalOrig = cleanMarkers(sourceEditor.value);
+      const finalTrans = cleanMarkers(translationView.textContent);
+      sourceEditor.value = finalOrig;
+      translationView.textContent = finalTrans;
       updateCharCount();
       isOcring = false;
       isTranslating = false;
       sourceEditor.placeholder = '你可以直接在此自由修改、校对文字 (按 Ctrl+Enter 重译)...';
       transStatusTip.textContent = '翻译完成';
       showToast('✓ 提取与翻译完成！');
+
+      // 自动归档至历史记录
+      if (finalOrig || finalTrans) {
+        historyManager.add({
+          id: 'hist_' + Date.now(),
+          timestamp: Date.now(),
+          timeStr: new Date().toLocaleString('zh-CN', { hour12: false }),
+          image: rawImageBase64,
+          original: finalOrig,
+          translated: finalTrans,
+          targetLang: targetLang
+        });
+      }
     },
     onError: (err) => {
       isOcring = false;
@@ -515,6 +580,18 @@ async function triggerTranslation(textToTranslate) {
     onEnd: () => {
       isTranslating = false;
       transStatusTip.textContent = '翻译完成';
+      // 更新或追加历史记录
+      if (result) {
+        historyManager.add({
+          id: 'hist_' + Date.now(),
+          timestamp: Date.now(),
+          timeStr: new Date().toLocaleString('zh-CN', { hour12: false }),
+          image: rawImageBase64,
+          original: text,
+          translated: cleanMarkers(result),
+          targetLang: targetLang
+        });
+      }
     },
     onError: (err) => {
       isTranslating = false;
@@ -585,6 +662,118 @@ function saveSettings() {
   }
 }
 
+/**
+ * 历史记录 UI 交互与渲染
+ */
+function openHistoryDrawer() {
+  renderHistoryList();
+  historyDrawer.classList.add('active');
+}
+
+function closeHistoryDrawer() {
+  historyDrawer.classList.remove('active');
+}
+
+function restoreHistoryItem(item, options = {}) {
+  if (!item) return;
+  rawImageBase64 = item.image || null;
+  currentImageBase64 = item.image || null;
+
+  if (item.image) {
+    emptyGuide.style.display = 'none';
+    thumbWrap.style.display = 'flex';
+    thumbImg.src = item.image;
+  } else {
+    emptyGuide.style.display = 'flex';
+    thumbWrap.style.display = 'none';
+    thumbImg.src = '';
+  }
+
+  sourceEditor.value = item.original || '';
+  translationView.textContent = item.translated || '';
+  if (item.targetLang) {
+    selectTargetLang.value = item.targetLang;
+  }
+  updateCharCount();
+  closeHistoryDrawer();
+
+  if (!options.silent) {
+    transStatusTip.textContent = `已载入历史记录 (${item.timeStr})`;
+    showToast('✓ 已恢复该条历史识别与翻译');
+  }
+}
+
+function renderHistoryList() {
+  const list = historyManager.getAll();
+  historyListContainer.innerHTML = '';
+
+  if (list.length === 0) {
+    historyListContainer.innerHTML = `
+      <div style="text-align: center; color: var(--text-muted); padding: 50px 0; font-size: 13px;">
+        <svg style="width: 40px; height: 40px; stroke: #94a3b8; margin-bottom: 8px;" viewBox="0 0 24 24" fill="none" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+        <div>暂无识别历史</div>
+        <div style="font-size: 11px; margin-top: 4px; color: #94a3b8;">每次截图识别翻译后将自动保存在此处</div>
+      </div>
+    `;
+    return;
+  }
+
+  list.forEach((item) => {
+    const card = document.createElement('div');
+    card.className = 'history-item';
+
+    const thumbHtml = item.image
+      ? `<img src="${item.image}" class="history-thumb" alt="截图" title="点击查看大图">`
+      : `<div class="history-thumb" style="display:flex;align-items:center;justify-content:center;color:#64748b;font-size:11px;">无图</div>`;
+
+    card.innerHTML = `
+      ${thumbHtml}
+      <div class="history-content">
+        <div class="history-meta">
+          <span>🕒 ${item.timeStr || '未知时间'}</span>
+          <span class="badge" style="background:#e0e7ff;color:#3730a3;">${item.targetLang || '翻译'}</span>
+        </div>
+        <div class="history-line-orig" title="${item.original || ''}">原文：${item.original ? item.original.replace(/[\r\n]+/g, ' ') : '(无原文)'}</div>
+        <div class="history-line-trans" title="${item.translated || ''}">译文：${item.translated ? item.translated.replace(/[\r\n]+/g, ' ') : '(无译文)'}</div>
+      </div>
+      <div class="history-actions">
+        <button class="btn btn-sm btn-primary btn-restore">载入</button>
+        <button class="btn btn-sm btn-delete" style="color:#ef4444;">删除</button>
+      </div>
+    `;
+
+    // 点击缩略图放大查看
+    const thumbElem = card.querySelector('.history-thumb');
+    if (thumbElem && item.image) {
+      thumbElem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (imageLightbox && lightboxImg) {
+          lightboxImg.src = item.image;
+          imageLightbox.classList.add('active');
+        }
+      });
+    }
+
+    // 载入按钮
+    card.querySelector('.btn-restore').addEventListener('click', () => {
+      restoreHistoryItem(item);
+    });
+
+    // 删除单条
+    card.querySelector('.btn-delete').addEventListener('click', (e) => {
+      e.stopPropagation();
+      historyManager.delete(item.id);
+      renderHistoryList();
+      showToast('已删除该条记录');
+    });
+
+    historyListContainer.appendChild(card);
+  });
+}
+
 const PRESETS = {
   dashscope: {
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -622,10 +811,34 @@ document.querySelectorAll('.tag-btn').forEach((btn) => {
 
 btnCapture.addEventListener('click', () => captureManager.startCapture());
 btnPaste.addEventListener('click', () => pasteImageFromClipboard());
+btnHistory.addEventListener('click', openHistoryDrawer);
+btnCloseHistory.addEventListener('click', closeHistoryDrawer);
+btnClearAllHistory.addEventListener('click', () => {
+  if (confirm('确定要清空全部识别历史吗？此操作无法撤销。')) {
+    historyManager.clear();
+    renderHistoryList();
+    showToast('识别历史已全部清空');
+  }
+});
+
+// 点击历史遮罩空白区域关闭抽屉
+historyDrawer.addEventListener('click', (e) => {
+  if (e.target === historyDrawer) {
+    closeHistoryDrawer();
+  }
+});
+
 btnSettings.addEventListener('click', openSettings);
 btnCloseSettings.addEventListener('click', closeSettings);
 btnCancelSettings.addEventListener('click', closeSettings);
 btnSaveSettings.addEventListener('click', saveSettings);
+
+// 点击设置遮罩空白处关闭
+settingsModal.addEventListener('click', (e) => {
+  if (e.target === settingsModal) {
+    closeSettings();
+  }
+});
 
 btnTestConn.addEventListener('click', async () => {
   testConnResult.style.color = '#3b82f6';
@@ -730,6 +943,10 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === 'Escape') {
     if (imageLightbox && imageLightbox.classList.contains('active')) {
       imageLightbox.classList.remove('active');
+    } else if (historyDrawer && historyDrawer.classList.contains('active')) {
+      closeHistoryDrawer();
+    } else if (settingsModal && settingsModal.classList.contains('active')) {
+      closeSettings();
     }
   }
 });
@@ -739,23 +956,42 @@ if (window.nativeBridge && window.nativeBridge.setHeight) {
 }
 
 /**
- * 自动截屏状态机与宿主事件监听
+ * 智能唤醒与启动状态策略
+ * 1. 如果已有历史记录，优先呈现最新一条历史记录在主界面，绝不强行自动截屏打断用户看历史的意图！
+ * 2. 如果历史记录为空（新用户或全新无数据），才平滑唤起全屏截图。
+ * 3. 当用户主动需要截新图时，只需点击顶部「重新截图」按钮即可。
  */
 let hasAutoTriggeredCapture = false;
 
-function triggerAutoCaptureIfEmpty(source) {
+function checkStartupState(source) {
   if (window.nativeBridge && window.nativeBridge.log) {
-    window.nativeBridge.log(`triggerAutoCaptureIfEmpty: 来源=${source}, autoTriggered=${hasAutoTriggeredCapture}, hasImage=${!!currentImageBase64}`);
+    window.nativeBridge.log(`checkStartupState: 来源=${source}, autoTriggered=${hasAutoTriggeredCapture}, hasImage=${!!currentImageBase64}`);
   }
   if (hasAutoTriggeredCapture) return;
-  if (!currentImageBase64) {
+
+  const historyList = historyManager.getAll();
+
+  // 如果已经存在历史记录，且当前工作区还没有图片
+  if (!currentImageBase64 && historyList && historyList.length > 0) {
+    // 恢复最近一次识别记录供用户查看
+    const latest = historyList[0];
+    restoreHistoryItem(latest, { silent: true });
+    transStatusTip.textContent = `已就绪 · 已载入最新记录 (${latest.timeStr})，点击「重新截图」圈选新图`;
+    if (window.nativeBridge && window.nativeBridge.log) {
+      window.nativeBridge.log('已载入最近历史记录，保持界面展现供用户查看');
+    }
+    return;
+  }
+
+  // 只有在完全没有任何历史记录且无图时，才自动唤起第一次截图引导
+  if (!currentImageBase64 && (!historyList || historyList.length === 0)) {
     hasAutoTriggeredCapture = true;
     if (window.nativeBridge && window.nativeBridge.log) {
-      window.nativeBridge.log('>>> 立即触发 captureManager.startCapture() <<<');
+      window.nativeBridge.log('历史记录为空，首次自动唤醒截图 captureManager.startCapture()');
     }
     setTimeout(() => {
       captureManager.startCapture();
-    }, 120);
+    }, 150);
   }
 }
 
@@ -767,19 +1003,20 @@ if (window.nativeBridge && window.nativeBridge.onPluginEnter) {
     }
     window.nativeBridge.setHeight(600);
 
+    // 如果用户是复制了图片后唤醒插件，直接处理入参图片
     if (action && action.type === 'img' && action.payload) {
       hasAutoTriggeredCapture = true;
       handleNewImage(action.payload);
       return;
     }
 
-    triggerAutoCaptureIfEmpty('onPluginEnter');
+    checkStartupState('onPluginEnter');
   });
 }
 
-// 2. 页面就绪后兜底自检（无图自动唤醒截图）
+// 2. 页面就绪后自检状态
 setTimeout(() => {
-  triggerAutoCaptureIfEmpty('PageReadyTimeout');
+  checkStartupState('PageReadyTimeout');
 }, 200);
 
 if (window.nativeBridge && window.nativeBridge.log) {
