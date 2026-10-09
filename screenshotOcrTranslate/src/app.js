@@ -355,9 +355,15 @@ if (window.nativeBridge && window.nativeBridge.onPluginEnter) {
   window.nativeBridge.onPluginEnter((action) => {
     window.nativeBridge.setHeight(600);
 
-    // 如果是通过复制图片触发插件的
+    // 1. 如果是通过直接复制已有图片呼出的，立即开始提取该图片
     if (action.type === 'img' && action.payload) {
       handleNewImage(action.payload);
+      return;
     }
+
+    // 2. 如果是输入关键字（ocr / 截图翻译）打开插件，立即自动唤起手动划选截图！
+    setTimeout(() => {
+      captureManager.startCapture();
+    }, 120);
   });
 }

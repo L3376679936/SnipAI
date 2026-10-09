@@ -1,13 +1,13 @@
 const screenshot = require('screenshot-desktop');
 const { clipboard } = require('electron');
-const { exec } = require('child_process');
+const { exec, execSync } = require('child_process');
 
 /**
  * 宿主与底层能力桥接器
  */
 window.nativeBridge = {
   /**
-   * 唤起系统级划选截屏并自动感知剪贴板载入
+   * 唤起系统级手动划选截屏并自动感知选区剪贴板载入
    */
   captureScreen: () => {
     return new Promise((resolve, reject) => {
@@ -25,52 +25,55 @@ window.nativeBridge = {
         console.warn('获取前置剪贴板失败:', e);
       }
 
-      // 3. 唤起 Windows 原生划选截屏（十字光标区域选择）
-      if (process.platform === 'win32') {
-        exec('start ms-screenclip:', (err) => {
-          if (err) {
-            console.warn('通过 start 唤起失败，尝试 explorer:', err);
-            exec('explorer.exe ms-screenclip:');
-          }
-        });
-
-        const startTime = Date.now();
-        const checkTimer = setInterval(() => {
-          try {
-            const currentImg = clipboard.readImage();
-            if (currentImg && !currentImg.isEmpty()) {
-              const currentDataUrl = currentImg.toDataURL();
-              // 检测到剪贴板出现了新的截图图片
-              if (currentDataUrl && currentDataUrl !== prevDataUrl) {
-                clearInterval(checkTimer);
-                window.nativeBridge.showMainWindow();
-                resolve(currentDataUrl);
-                return;
-              }
-            }
-          } catch (err) {}
-
-          // 40秒超时保护
-          if (Date.now() - startTime > 40000) {
-            clearInterval(checkTimer);
-            window.nativeBridge.showMainWindow();
-            reject(new Error('截图未完成或已取消'));
-          }
-        }, 300);
-
-        return;
+      // 3. 唤起手动划选截屏：优先调用本机已运行的 Snipaste 进程
+      let snipastePath = '';
+      try {
+        const stdout = execSync(
+          'powershell -NoProfile -Command "(Get-Process -Name snipaste -ErrorAction SilentlyContinue).Path"',
+          { encoding: 'utf-8', timeout: 1500 }
+        );
+        snipastePath = stdout.trim();
+      } catch (e) {
+        console.warn('查找 Snipaste 失败:', e);
       }
 
-      // 非 Windows 平台回退方案
-      screenshot({ format: 'png' })
-        .then((buf) => {
-          window.nativeBridge.showMainWindow();
-          resolve(`data:image/png;base64,${buf.toString('base64')}`);
-        })
-        .catch((err) => {
-          window.nativeBridge.showMainWindow();
-          reject(err);
+      if (snipastePath) {
+        // 直接调用原生 Snipaste 划选
+        exec(`"${snipastePath}" snip`, (err) => {
+          if (err) {
+            console.warn('执行 Snipaste snip 失败，回退 Windows 原生截图:', err);
+            exec('start ms-screenclip:?cliptype=Rectangle');
+          }
         });
+      } else {
+        // 回退到 Windows 原生矩形选区截图
+        exec('start ms-screenclip:?cliptype=Rectangle');
+      }
+
+      // 4. 轮询剪贴板，等待用户框选完成（双击选区、Enter 或复制）
+      const startTime = Date.now();
+      const checkTimer = setInterval(() => {
+        try {
+          const currentImg = clipboard.readImage();
+          if (currentImg && !currentImg.isEmpty()) {
+            const currentDataUrl = currentImg.toDataURL();
+            // 检测到剪贴板出现了新的截图图片
+            if (currentDataUrl && currentDataUrl !== prevDataUrl) {
+              clearInterval(checkTimer);
+              window.nativeBridge.showMainWindow();
+              resolve(currentDataUrl);
+              return;
+            }
+          }
+        } catch (err) {}
+
+        // 45秒超时保护
+        if (Date.now() - startTime > 45000) {
+          clearInterval(checkTimer);
+          window.nativeBridge.showMainWindow();
+          reject(new Error('截图未完成或已取消'));
+        }
+      }, 300);
     });
   },
 
