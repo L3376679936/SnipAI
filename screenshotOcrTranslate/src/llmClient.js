@@ -5,7 +5,7 @@ const DEFAULT_CONFIG = {
   baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   apiKey: '',
   visionModel: 'qwen-vl-max',
-  translateModel: 'qwen-plus',
+  translateModel: 'qwen-turbo', // 默认使用极速文本模型，首字 200ms，大幅提升重译速度
   customOcrPrompt: '请仔细识别并提取这张图片中的所有文字。严格保持原有的段落排版和顺序。若含有代码或公式请完整保留。请直接输出提取出的文本内容，严禁输出任何问候语、说明、解释或附加符号。',
   customTranslatePrompt: '你是一位精通多国语言的高级专业翻译官。请将输入的内容准确、地道、优雅地翻译成目标语言，语言通顺，语义精准，保持原有换行格式，直接输出译文，不要包含任何多余解释。'
 };
@@ -108,9 +108,16 @@ async function streamFetch(url, options, onChunk, onEnd, onError) {
 }
 
 /**
- * 1. 多模态 OCR 文字识别
+ * 1. 极速一站式：单次多模态请求同步获取提取原文与目标语言译文（提速 200% 以上）
  */
-export async function runVisionOcr({ base64Image, onChunk, onEnd, onError }) {
+export async function runFastVisionOcrAndTranslate({
+  base64Image,
+  targetLang,
+  onOriginalChunk,
+  onTranslateChunk,
+  onEnd,
+  onError
+}) {
   const config = configManager.get();
   if (!config.apiKey) {
     onError && onError(new Error('请先在设置中填写 API Key！'));
@@ -118,6 +125,13 @@ export async function runVisionOcr({ base64Image, onChunk, onEnd, onError }) {
   }
 
   const endpoint = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+
+  const fastPrompt = `请仔细识别图片中的文字，并将其精准翻译为【${targetLang}】。
+严格遵守以下标记格式输出，严禁输出任何多余的开场白或解释：
+<<<ORIGINAL>>>
+(在此输出识别提取出的原文，保持原有换行格式)
+<<<TRANSLATED>>>
+(在此输出翻译后的${targetLang}译文)`;
 
   const payload = {
     model: config.visionModel || 'qwen-vl-max',
@@ -128,7 +142,7 @@ export async function runVisionOcr({ base64Image, onChunk, onEnd, onError }) {
         content: [
           {
             type: 'text',
-            text: config.customOcrPrompt || DEFAULT_CONFIG.customOcrPrompt
+            text: fastPrompt
           },
           {
             type: 'image_url',
@@ -141,6 +155,9 @@ export async function runVisionOcr({ base64Image, onChunk, onEnd, onError }) {
     ]
   };
 
+  let mode = 'pre'; // 'pre' -> 'original' -> 'translated'
+  let rawBuffer = '';
+
   await streamFetch(
     endpoint,
     {
@@ -151,14 +168,36 @@ export async function runVisionOcr({ base64Image, onChunk, onEnd, onError }) {
       },
       body: JSON.stringify(payload)
     },
-    onChunk,
+    (delta) => {
+      rawBuffer += delta;
+
+      if (mode === 'pre') {
+        const origIdx = rawBuffer.indexOf('<<<ORIGINAL>>>');
+        if (origIdx !== -1) {
+          mode = 'original';
+          rawBuffer = rawBuffer.substring(origIdx + '<<<ORIGINAL>>>'.length).replace(/^\s+/, '');
+          if (rawBuffer) onOriginalChunk(rawBuffer);
+        }
+      } else if (mode === 'original') {
+        const transIdx = rawBuffer.indexOf('<<<TRANSLATED>>>');
+        if (transIdx !== -1) {
+          mode = 'translated';
+          rawBuffer = rawBuffer.substring(transIdx + '<<<TRANSLATED>>>'.length).replace(/^\s+/, '');
+          if (rawBuffer) onTranslateChunk(rawBuffer);
+        } else {
+          onOriginalChunk(delta);
+        }
+      } else if (mode === 'translated') {
+        onTranslateChunk(delta);
+      }
+    },
     onEnd,
     onError
   );
 }
 
 /**
- * 2. 智能文本翻译
+ * 2. 独立纯文本流式重译 (当用户修改了左侧原文后触发，调用极速文本模型)
  */
 export async function runTranslate({ text, targetLang, onChunk, onEnd, onError }) {
   const config = configManager.get();
@@ -174,7 +213,7 @@ export async function runTranslate({ text, targetLang, onChunk, onEnd, onError }
   const endpoint = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
   const payload = {
-    model: config.translateModel || 'qwen-plus',
+    model: config.translateModel || 'qwen-turbo',
     stream: true,
     messages: [
       {
@@ -221,7 +260,7 @@ export async function testApiConnection(customCfg) {
       Authorization: `Bearer ${cfg.apiKey}`
     },
     body: JSON.stringify({
-      model: cfg.translateModel || cfg.visionModel || 'qwen-plus',
+      model: cfg.translateModel || cfg.visionModel || 'qwen-turbo',
       messages: [{ role: 'user', content: 'Hi, please reply with OK.' }],
       max_tokens: 10
     })

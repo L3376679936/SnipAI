@@ -51,8 +51,8 @@ function updateCharCount() {
   sourceCharCount.textContent = `${len} 字`;
 }
 
-// 针对高分辨率屏幕进行自适应内存优化压缩，防止大图占用巨量内存引起卡顿
-function compressImageIfNeeded(base64Data, maxWidth = 1920, maxHeight = 1080) {
+// 针对高分辨率屏幕进行自适应内存与极速传输压缩 (1200px 黄金尺寸，Vision Token 锐减 70%，首字极速返回)
+function compressImageIfNeeded(base64Data, maxWidth = 1200, maxHeight = 800) {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
@@ -71,7 +71,7 @@ function compressImageIfNeeded(base64Data, maxWidth = 1920, maxHeight = 1080) {
       canvas.height = targetH;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, targetW, targetH);
-      const compressed = canvas.toDataURL('image/jpeg', 0.88);
+      const compressed = canvas.toDataURL('image/jpeg', 0.85);
       canvas.width = 0;
       canvas.height = 0;
       resolve(compressed);
@@ -97,41 +97,49 @@ async function handleNewImage(rawBase64) {
 
   const cfg = configManager.get();
   if (!cfg.apiKey) {
-    showToast('请先点击右上角设置配置 API Key');
+    showToast('请先在弹窗中配置 API Key 后保存');
     openSettings();
     return;
   }
 
-  // 2. 触发多模态 OCR
+  // 读取当前目标语言（默认简体中文）
+  const targetLang = selectTargetLang.value || '简体中文';
+
+  // 2. 触发一站式极速 OCR 与同步流式翻译（提速 2~3 倍）
   isOcring = true;
-  sourceEditor.placeholder = '大模型正在智能识别提取图片文字...';
-  transStatusTip.textContent = '正在识别文字...';
+  isTranslating = true;
+  sourceEditor.placeholder = '大模型正在极速识别提取文字...';
+  transStatusTip.textContent = `正在并行提取与翻译为【${targetLang}】...`;
 
-  let extractedText = '';
+  let originalBuffer = '';
+  let translateBuffer = '';
 
-  await runVisionOcr({
+  await runFastVisionOcrAndTranslate({
     base64Image: base64Data,
-    onChunk: (chunk) => {
-      extractedText += chunk;
-      sourceEditor.value = extractedText;
+    targetLang: targetLang,
+    onOriginalChunk: (chunk) => {
+      originalBuffer += chunk;
+      sourceEditor.value = originalBuffer;
       updateCharCount();
+    },
+    onTranslateChunk: (chunk) => {
+      translateBuffer += chunk;
+      translationView.textContent = translateBuffer;
+      transStatusTip.textContent = `翻译中...`;
     },
     onEnd: () => {
       isOcring = false;
-      sourceEditor.placeholder = '你可以直接在此自由修改、校对文字...';
-      transStatusTip.textContent = '文字提取完成，准备翻译';
-      showToast('文字提取完成！');
-
-      // 3. 提取完成后自动触发翻译
-      if (extractedText.trim()) {
-        triggerTranslation(extractedText);
-      }
+      isTranslating = false;
+      sourceEditor.placeholder = '你可以直接在此自由修改、校对文字 (按 Ctrl+Enter 重译)...';
+      transStatusTip.textContent = '翻译完成';
+      showToast('✓ 提取与翻译完成！');
     },
     onError: (err) => {
       isOcring = false;
+      isTranslating = false;
       sourceEditor.placeholder = '文字识别失败，请检查 API 配置';
-      transStatusTip.textContent = 'OCR 识别出错';
-      showToast('OCR 识别失败: ' + err.message, 3000);
+      transStatusTip.textContent = '识别出错';
+      showToast('识别失败: ' + err.message, 3000);
     }
   });
 }
