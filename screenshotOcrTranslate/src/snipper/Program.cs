@@ -68,7 +68,8 @@ namespace RubickSnipper
         Ellipse,
         Arrow,
         Brush,
-        Mosaic
+        Mosaic,
+        Text
     }
 
     public enum HitType
@@ -220,6 +221,49 @@ namespace RubickSnipper
         }
     }
 
+    public class TextAnnotation : AnnotationItem
+    {
+        public Point Location;
+        public string Text;
+        public Font TextFont;
+        public Color Color;
+
+        public override void Draw(Graphics g)
+        {
+            if (string.IsNullOrEmpty(Text) || TextFont == null) return;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+            // 1. Snipaste 核心质感：高对比度微阴影描边 (确保深浅任何背景下文字都极度清晰)
+            bool isDarkColor = (Color.R * 0.299 + Color.G * 0.587 + Color.B * 0.114) < 128;
+            Color shadowColor = isDarkColor ? Color.FromArgb(160, 255, 255, 255) : Color.FromArgb(160, 15, 23, 42);
+
+            using (SolidBrush shadowBrush = new SolidBrush(shadowColor))
+            {
+                g.DrawString(Text, TextFont, shadowBrush, Location.X + 1, Location.Y + 1);
+            }
+
+            // 2. 主体色文字
+            using (SolidBrush mainBrush = new SolidBrush(Color))
+            {
+                g.DrawString(Text, TextFont, mainBrush, Location.X, Location.Y);
+            }
+        }
+
+        public override void Offset(int dx, int dy)
+        {
+            Location.Offset(dx, dy);
+        }
+
+        public override void Dispose()
+        {
+            if (TextFont != null)
+            {
+                TextFont.Dispose();
+                TextFont = null;
+            }
+        }
+    }
+
     public class SnipperForm : Form
     {
         private readonly Bitmap _fullBmp;
@@ -231,20 +275,25 @@ namespace RubickSnipper
         private bool _hasSelected = false;
         private Rectangle _selectedRect;
 
-        // 8点与移动控制
+        // 8点拉伸与移动
         private HitType _currentHit = HitType.None;
         private bool _isResizingOrMoving = false;
         private Rectangle _initialRect;
 
-        // 标注与撤销/重做
+        // 标注历史栈
         private ToolType _currentTool = ToolType.None;
         private readonly List<AnnotationItem> _annotations = new List<AnnotationItem>();
         private readonly List<AnnotationItem> _redoStack = new List<AnnotationItem>();
         private AnnotationItem _tempAnnotation = null;
 
-        // 颜色与线宽
+        // 文字输入控件
+        private TextBox _activeTextBox = null;
+        private Point _textInputPos;
+
+        // 样式配置：颜色、线宽与字号
         private Color _activeColor = Color.FromArgb(239, 68, 68); // 默认红
         private float _penWidth = 3f; // 细=2, 中=4, 粗=8
+        private float _fontSize = 15f; // 小=12, 中=16, 大=22
 
         private static readonly Color[] PRESET_COLORS = new Color[]
         {
@@ -259,6 +308,7 @@ namespace RubickSnipper
         };
 
         private static readonly float[] PRESET_WIDTHS = new float[] { 2f, 4f, 8f };
+        private static readonly float[] PRESET_FONT_SIZES = new float[] { 11f, 16f, 22f };
 
         // 交互按钮
         private class ToolButton
@@ -276,7 +326,8 @@ namespace RubickSnipper
             public Rectangle Bounds;
             public bool IsColor;
             public Color ColorValue;
-            public float WidthValue;
+            public float SizeValue;
+            public string Label;
             public Action ClickAction;
         }
 
@@ -315,14 +366,12 @@ namespace RubickSnipper
         {
             if (!_hasSelected) return HitType.None;
 
-            // 1. 命中工具栏或二级属性栏
             if (_toolBarBounds.Contains(pt)) return HitType.ToolBar;
             if (HasSubBar() && _subBarBounds.Contains(pt)) return HitType.SubBar;
 
             int handleSize = 10;
             Rectangle r = _selectedRect;
 
-            // 8 个控制把手
             Rectangle rTL = new Rectangle(r.Left - handleSize / 2, r.Top - handleSize / 2, handleSize, handleSize);
             Rectangle rTR = new Rectangle(r.Right - handleSize / 2, r.Top - handleSize / 2, handleSize, handleSize);
             Rectangle rBL = new Rectangle(r.Left - handleSize / 2, r.Bottom - handleSize / 2, handleSize, handleSize);
@@ -342,21 +391,19 @@ namespace RubickSnipper
             if (rL.Contains(pt)) return HitType.Left;
             if (rR.Contains(pt)) return HitType.Right;
 
-            // 4条边框附近 (容差 5px)
             int borderEdge = 5;
             if (Math.Abs(pt.Y - r.Top) <= borderEdge && pt.X >= r.Left && pt.X <= r.Right) return HitType.Top;
             if (Math.Abs(pt.Y - r.Bottom) <= borderEdge && pt.X >= r.Left && pt.X <= r.Right) return HitType.Bottom;
             if (Math.Abs(pt.X - r.Left) <= borderEdge && pt.Y >= r.Top && pt.Y <= r.Bottom) return HitType.Left;
             if (Math.Abs(pt.X - r.Right) <= borderEdge && pt.Y >= r.Top && pt.Y <= r.Bottom) return HitType.Right;
 
-            // 选区内部
             if (r.Contains(pt))
             {
                 if (_currentTool == ToolType.None)
                 {
                     return HitType.Move;
                 }
-                return HitType.None; // 处于标注绘制模式
+                return HitType.None;
             }
 
             return HitType.None;
@@ -384,6 +431,7 @@ namespace RubickSnipper
                 case HitType.SubBar:
                     return Cursors.Hand;
                 default:
+                    if (_currentTool == ToolType.Text) return Cursors.IBeam;
                     return _hasSelected && _currentTool != ToolType.None ? Cursors.Cross : Cursors.Cross;
             }
         }
@@ -393,13 +441,20 @@ namespace RubickSnipper
             return _hasSelected && (_currentTool == ToolType.Rect ||
                                     _currentTool == ToolType.Ellipse ||
                                     _currentTool == ToolType.Arrow ||
-                                    _currentTool == ToolType.Brush);
+                                    _currentTool == ToolType.Brush ||
+                                    _currentTool == ToolType.Text);
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
             {
+                // 如果正在输入文字，点击其它区域先提交文字
+                if (_activeTextBox != null)
+                {
+                    CommitActiveText();
+                }
+
                 // 1. 点击主工具栏
                 if (_hasSelected && _toolBarBounds.Contains(e.Location))
                 {
@@ -419,7 +474,7 @@ namespace RubickSnipper
                     return;
                 }
 
-                // 2. 点击二级属性栏（颜色/粗细）
+                // 2. 点击二级属性栏（颜色/粗细/字号）
                 if (HasSubBar() && _subBarBounds.Contains(e.Location))
                 {
                     foreach (SubOptionItem sub in _subOptions)
@@ -449,7 +504,14 @@ namespace RubickSnipper
                     return;
                 }
 
-                // 4. 在选区内绘制标注
+                // 4. 文字标注工具：点击位置弹出输入框
+                if (_hasSelected && _currentTool == ToolType.Text && _selectedRect.Contains(e.Location))
+                {
+                    SpawnTextInput(e.Location);
+                    return;
+                }
+
+                // 5. 在选区内绘制图形标注
                 if (_hasSelected && _currentTool != ToolType.None && _selectedRect.Contains(e.Location))
                 {
                     _startPoint = e.Location;
@@ -459,7 +521,7 @@ namespace RubickSnipper
                     return;
                 }
 
-                // 5. 点击外部重新框选
+                // 6. 点击外部重新框选
                 _startPoint = e.Location;
                 _lastDragPoint = e.Location;
                 _isSelecting = true;
@@ -470,6 +532,12 @@ namespace RubickSnipper
             }
             else if (e.Button == MouseButtons.Right)
             {
+                if (_activeTextBox != null)
+                {
+                    CancelActiveText();
+                    return;
+                }
+
                 if (_hasSelected)
                 {
                     _hasSelected = false;
@@ -479,11 +547,95 @@ namespace RubickSnipper
                 }
                 else
                 {
-                    this.DialogResult = DialogResult.Cancel;
-                    this.Close();
+                    CancelCrop();
                 }
             }
             base.OnMouseDown(e);
+        }
+
+        private void SpawnTextInput(Point pt)
+        {
+            _textInputPos = pt;
+            int boxW = Math.Max(140, Math.Min(360, _selectedRect.Right - pt.X - 8));
+            int boxH = (int)(_fontSize * 2.2f) + 14;
+
+            _activeTextBox = new TextBox();
+            _activeTextBox.Multiline = true;
+            _activeTextBox.WordWrap = true;
+            _activeTextBox.Location = pt;
+            _activeTextBox.Size = new Size(boxW, boxH);
+            _activeTextBox.Font = new Font("Microsoft YaHei", _fontSize, FontStyle.Bold);
+            _activeTextBox.ForeColor = _activeColor;
+            _activeTextBox.BackColor = Color.FromArgb(255, 255, 255);
+            _activeTextBox.BorderStyle = BorderStyle.FixedSingle;
+
+            // 随着输入字数自适应撑开宽高
+            _activeTextBox.TextChanged += (s, te) =>
+            {
+                Size sz = TextRenderer.MeasureText(_activeTextBox.Text + " \n", _activeTextBox.Font);
+                int nw = Math.Max(boxW, Math.Min(_selectedRect.Right - pt.X - 4, sz.Width + 20));
+                int nh = Math.Max(boxH, Math.Min(_selectedRect.Bottom - pt.Y - 4, sz.Height + 14));
+                _activeTextBox.Size = new Size(nw, nh);
+            };
+
+            _activeTextBox.KeyDown += (s, ke) =>
+            {
+                // Ctrl+Enter 提交固化
+                if (ke.Control && ke.KeyCode == Keys.Enter)
+                {
+                    ke.SuppressKeyPress = true;
+                    CommitActiveText();
+                }
+                else if (ke.KeyCode == Keys.Escape)
+                {
+                    ke.SuppressKeyPress = true;
+                    CancelActiveText();
+                }
+            };
+
+            _activeTextBox.LostFocus += (s, le) =>
+            {
+                CommitActiveText();
+            };
+
+            this.Controls.Add(_activeTextBox);
+            _activeTextBox.Focus();
+        }
+
+        private void CommitActiveText()
+        {
+            if (_activeTextBox == null) return;
+            string txt = _activeTextBox.Text.Trim();
+            if (!string.IsNullOrEmpty(txt))
+            {
+                Font f = new Font("Microsoft YaHei", _fontSize, FontStyle.Bold);
+                TextAnnotation ta = new TextAnnotation
+                {
+                    Location = _textInputPos,
+                    Text = txt,
+                    TextFont = f,
+                    Color = _activeColor
+                };
+                _annotations.Add(ta);
+                ClearRedoStack();
+                UpdateBarsLayout();
+            }
+
+            this.Controls.Remove(_activeTextBox);
+            _activeTextBox.Dispose();
+            _activeTextBox = null;
+            Invalidate();
+        }
+
+        private void CancelActiveText()
+        {
+            if (_activeTextBox != null)
+            {
+                this.Controls.Remove(_activeTextBox);
+                _activeTextBox.Dispose();
+                _activeTextBox = null;
+                Invalidate();
+            }
         }
 
         private void StartNewAnnotation(Point pt)
@@ -512,7 +664,6 @@ namespace RubickSnipper
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
-            // 悬停按钮检测
             if (_hasSelected)
             {
                 ToolButton foundBtn = null;
@@ -551,22 +702,19 @@ namespace RubickSnipper
                     Invalidate();
                 }
 
-                // 鼠标光标切换
-                if (!_isSelecting && !_isResizingOrMoving && _tempAnnotation == null)
+                if (!_isSelecting && !_isResizingOrMoving && _tempAnnotation == null && _activeTextBox == null)
                 {
                     HitType hit = CheckHitTest(e.Location);
                     this.Cursor = GetCursorForHit(hit);
                 }
             }
 
-            // 1. 初始框选
             if (_isSelecting)
             {
                 _lastDragPoint = e.Location;
                 _selectedRect = GetNormalizedRect(_startPoint, _lastDragPoint);
                 Invalidate();
             }
-            // 2. 调整选区大小或移动位置
             else if (_isResizingOrMoving)
             {
                 int dx = e.Location.X - _startPoint.X;
@@ -578,7 +726,6 @@ namespace RubickSnipper
                     int stepY = e.Location.Y - _lastDragPoint.Y;
                     _lastDragPoint = e.Location;
 
-                    // 限制不超出屏幕
                     int newX = _selectedRect.X + stepX;
                     int newY = _selectedRect.Y + stepY;
                     newX = Math.Max(0, Math.Min(this.Width - _selectedRect.Width, newX));
@@ -590,7 +737,6 @@ namespace RubickSnipper
                     _selectedRect.X = newX;
                     _selectedRect.Y = newY;
 
-                    // 画面内所有已有标注物同步位移！
                     if (actualDx != 0 || actualDy != 0)
                     {
                         foreach (var ann in _annotations)
@@ -601,7 +747,6 @@ namespace RubickSnipper
                 }
                 else
                 {
-                    // 8点缩放调整
                     Rectangle r = _initialRect;
                     int left = r.Left;
                     int top = r.Top;
@@ -639,7 +784,6 @@ namespace RubickSnipper
                 UpdateBarsLayout();
                 Invalidate();
             }
-            // 3. 正在绘制标注
             else if (_tempAnnotation != null)
             {
                 _lastDragPoint = e.Location;
@@ -700,7 +844,6 @@ namespace RubickSnipper
                 _annotations.Add(_tempAnnotation);
                 _tempAnnotation = null;
 
-                // 产生新标注后，清空重做栈
                 ClearRedoStack();
                 UpdateBarsLayout();
                 Invalidate();
@@ -746,6 +889,12 @@ namespace RubickSnipper
         {
             if (e.KeyCode == Keys.Escape)
             {
+                if (_activeTextBox != null)
+                {
+                    CancelActiveText();
+                    return;
+                }
+
                 if (_hasSelected)
                 {
                     _hasSelected = false;
@@ -755,13 +904,19 @@ namespace RubickSnipper
                 }
                 else
                 {
-                    this.DialogResult = DialogResult.Cancel;
-                    this.Close();
+                    CancelCrop();
                 }
             }
             else if (e.KeyCode == Keys.Enter)
             {
-                if (_hasSelected) ConfirmCrop();
+                if (_activeTextBox != null)
+                {
+                    CommitActiveText();
+                }
+                else if (_hasSelected)
+                {
+                    ConfirmCrop();
+                }
             }
             else if (e.Control && e.KeyCode == Keys.Z)
             {
@@ -808,6 +963,12 @@ namespace RubickSnipper
             }
         }
 
+        private void CancelCrop()
+        {
+            this.DialogResult = DialogResult.Cancel;
+            this.Close();
+        }
+
         private void UpdateBarsLayout()
         {
             _toolButtons.Clear();
@@ -824,10 +985,12 @@ namespace RubickSnipper
                 new { Id = "arrow",   Tip = "箭头", Tool = ToolType.Arrow },
                 new { Id = "brush",   Tip = "画笔", Tool = ToolType.Brush },
                 new { Id = "mosaic",  Tip = "马赛克", Tool = ToolType.Mosaic },
+                new { Id = "text",    Tip = "文字标注", Tool = ToolType.Text },
                 new { Id = "sep1",    Tip = "", Tool = ToolType.None },
                 new { Id = "undo",    Tip = "撤销 (Ctrl+Z)", Tool = ToolType.None },
                 new { Id = "redo",    Tip = "重做/下一步 (Ctrl+Y)", Tool = ToolType.None },
                 new { Id = "sep2",    Tip = "", Tool = ToolType.None },
+                new { Id = "cancel",  Tip = "放弃截图 (Esc)", Tool = ToolType.None },
                 new { Id = "save",    Tip = "保存图片 (Ctrl+S)", Tool = ToolType.None },
                 new { Id = "copy",    Tip = "复制截图 (Ctrl+C)", Tool = ToolType.None },
                 new { Id = "ok",      Tip = "完成并识别翻译 (Enter)", Tool = ToolType.None }
@@ -882,6 +1045,10 @@ namespace RubickSnipper
                 {
                     act = delegate { _currentTool = (_currentTool == ToolType.Mosaic) ? ToolType.None : ToolType.Mosaic; };
                 }
+                else if (d.Id == "text")
+                {
+                    act = delegate { _currentTool = (_currentTool == ToolType.Text) ? ToolType.None : ToolType.Text; };
+                }
                 else if (d.Id == "undo")
                 {
                     disabled = (_annotations.Count == 0);
@@ -891,6 +1058,10 @@ namespace RubickSnipper
                 {
                     disabled = (_redoStack.Count == 0);
                     act = delegate { PerformRedo(); };
+                }
+                else if (d.Id == "cancel")
+                {
+                    act = delegate { CancelCrop(); };
                 }
                 else if (d.Id == "save")
                 {
@@ -914,7 +1085,7 @@ namespace RubickSnipper
                 curX += w + margin;
             }
 
-            // 布局二级属性栏（粗细与颜色）
+            // 布局二级属性栏（粗细/字号 + 颜色）
             if (HasSubBar())
             {
                 int subH = 34;
@@ -933,24 +1104,45 @@ namespace RubickSnipper
                 int sx = subX + 8;
                 int sy = subY + 5;
 
-                // 1. 三种粗细按钮
-                for (int i = 0; i < PRESET_WIDTHS.Length; i++)
+                bool isTextMode = (_currentTool == ToolType.Text);
+
+                // 1. 三档大小选择（画笔粗细 / 文字字号）
+                float[] sizes = isTextMode ? PRESET_FONT_SIZES : PRESET_WIDTHS;
+                string[] labels = new string[] { "小", "中", "大" };
+
+                for (int i = 0; i < sizes.Length; i++)
                 {
-                    float pw = PRESET_WIDTHS[i];
+                    float szVal = sizes[i];
+                    string lbl = labels[i];
                     Rectangle br = new Rectangle(sx, sy, 24, 24);
                     _subOptions.Add(new SubOptionItem
                     {
                         Bounds = br,
                         IsColor = false,
-                        WidthValue = pw,
-                        ClickAction = delegate { _penWidth = pw; }
+                        SizeValue = szVal,
+                        Label = lbl,
+                        ClickAction = delegate
+                        {
+                            if (isTextMode)
+                            {
+                                _fontSize = szVal;
+                                if (_activeTextBox != null)
+                                {
+                                    _activeTextBox.Font = new Font("Microsoft YaHei", _fontSize, FontStyle.Bold);
+                                }
+                            }
+                            else
+                            {
+                                _penWidth = szVal;
+                            }
+                        }
                     });
                     sx += 26;
                 }
 
-                sx += 8; // 分隔空白
+                sx += 8;
 
-                // 2. 8种颜色按钮
+                // 2. 8种颜色
                 for (int i = 0; i < PRESET_COLORS.Length; i++)
                 {
                     Color c = PRESET_COLORS[i];
@@ -960,7 +1152,14 @@ namespace RubickSnipper
                         Bounds = cr,
                         IsColor = true,
                         ColorValue = c,
-                        ClickAction = delegate { _activeColor = c; }
+                        ClickAction = delegate
+                        {
+                            _activeColor = c;
+                            if (_activeTextBox != null)
+                            {
+                                _activeTextBox.ForeColor = c;
+                            }
+                        }
                     });
                     sx += 24;
                 }
@@ -1028,10 +1227,8 @@ namespace RubickSnipper
         {
             Graphics g = e.Graphics;
 
-            // 1. 底图
             g.DrawImageUnscaled(_fullBmp, 0, 0);
 
-            // 2. 四矩形几何遮罩 (0 内存，0.1ms)
             if (_isSelecting || _hasSelected)
             {
                 Rectangle r = _selectedRect;
@@ -1045,7 +1242,6 @@ namespace RubickSnipper
                 g.FillRectangle(_maskBrush, 0, 0, this.Width, this.Height);
             }
 
-            // 3. 标注
             foreach (AnnotationItem ann in _annotations)
             {
                 ann.Draw(g);
@@ -1055,13 +1251,11 @@ namespace RubickSnipper
                 _tempAnnotation.Draw(g);
             }
 
-            // 4. 选区边框与 8 点控制手柄
             if ((_isSelecting || _hasSelected) && _selectedRect.Width > 0 && _selectedRect.Height > 0)
             {
                 g.DrawRectangle(_borderPen, _selectedRect);
                 DrawHandlePoints(g, _selectedRect);
 
-                // 尺寸信息
                 string tip = string.Format("{0} × {1} px", _selectedRect.Width, _selectedRect.Height);
                 SizeF size = g.MeasureString(tip, _tipFont);
                 float tipY = _selectedRect.Top - size.Height - 8;
@@ -1075,7 +1269,6 @@ namespace RubickSnipper
                     g.DrawString(tip, _tipFont, textBrush, tipX + 5, tipY + 2);
                 }
 
-                // 5. 绘制 Snipaste 风格主工具栏与二级属性栏
                 if (_hasSelected && _toolButtons.Count > 0)
                 {
                     DrawToolBar(g);
@@ -1087,7 +1280,7 @@ namespace RubickSnipper
             }
             else if (!_isSelecting && !_hasSelected)
             {
-                string guide = "请按住鼠标左键拖拽框选区域 (Esc 退出)";
+                string guide = "请按住鼠标左键拖拽框选区域 (Esc 取消)";
                 SizeF size = g.MeasureString(guide, _uiFont);
                 float tipX = (this.Width - size.Width) / 2;
                 float tipY = (this.Height - size.Height) / 2;
@@ -1128,7 +1321,6 @@ namespace RubickSnipper
 
         private void DrawCardShadow(Graphics g, Rectangle rect, int radius)
         {
-            // 2层平滑微阴影
             for (int i = 3; i >= 1; i--)
             {
                 using (Pen sp = new Pen(Color.FromArgb(10 * (4 - i), 0, 0, 0), 1))
@@ -1180,10 +1372,9 @@ namespace RubickSnipper
                 bool isActive = (_currentTool != ToolType.None && btn.Tool == _currentTool);
                 bool isHover = (btn == _hoveredBtn && !btn.IsDisabled);
 
-                // 圆角高亮按钮
                 if (isActive || isHover)
                 {
-                    Color bgCol = isActive ? Color.FromArgb(224, 242, 254) : Color.FromArgb(241, 245, 249);
+                    Color bgCol = isActive ? Color.FromArgb(224, 242, 254) : (btn.Id == "cancel" ? Color.FromArgb(254, 226, 226) : Color.FromArgb(241, 245, 249));
                     Color borderCol = isActive ? Color.FromArgb(186, 230, 253) : Color.Transparent;
 
                     using (GraphicsPath bp = CreateRoundedRectanglePath(btn.Bounds, 4))
@@ -1199,6 +1390,10 @@ namespace RubickSnipper
                 if (btn.IsDisabled)
                 {
                     iconColor = Color.FromArgb(203, 213, 225);
+                }
+                else if (btn.Id == "cancel" && isHover)
+                {
+                    iconColor = Color.FromArgb(220, 38, 38);
                 }
                 else if (isActive)
                 {
@@ -1216,7 +1411,6 @@ namespace RubickSnipper
                 DrawVectorIcon(g, btn.Id, btn.Bounds, iconColor);
             }
 
-            // 浮动 Tooltip 气泡
             if (_hoveredBtn != null && !string.IsNullOrEmpty(_hoveredBtn.Tooltip) && !_hoveredBtn.IsDisabled)
             {
                 using (Font tipF = new Font("Microsoft YaHei", 8.5f))
@@ -1251,12 +1445,13 @@ namespace RubickSnipper
                 g.DrawPath(border, path);
             }
 
+            bool isTextMode = (_currentTool == ToolType.Text);
+
             foreach (SubOptionItem sub in _subOptions)
             {
                 if (!sub.IsColor)
                 {
-                    // 粗细选项
-                    bool isSelected = Math.Abs(_penWidth - sub.WidthValue) < 0.1f;
+                    bool isSelected = isTextMode ? (Math.Abs(_fontSize - sub.SizeValue) < 0.1f) : (Math.Abs(_penWidth - sub.SizeValue) < 0.1f);
                     bool isHover = (sub == _hoveredSub);
 
                     if (isSelected || isHover)
@@ -1269,20 +1464,32 @@ namespace RubickSnipper
                         }
                     }
 
-                    // 绘制粗细圆点
-                    int dotSize = (int)(sub.WidthValue * 1.5f + 4);
                     int cx = sub.Bounds.Left + sub.Bounds.Width / 2;
                     int cy = sub.Bounds.Top + sub.Bounds.Height / 2;
-                    Color dotColor = isSelected ? Color.FromArgb(2, 132, 199) : Color.FromArgb(71, 85, 105);
+                    Color itemColor = isSelected ? Color.FromArgb(2, 132, 199) : Color.FromArgb(71, 85, 105);
 
-                    using (SolidBrush db = new SolidBrush(dotColor))
+                    if (isTextMode)
                     {
-                        g.FillEllipse(db, cx - dotSize / 2, cy - dotSize / 2, dotSize, dotSize);
+                        // 绘制小/中/大文字标志
+                        using (Font sf = new Font("Microsoft YaHei", 8f, isSelected ? FontStyle.Bold : FontStyle.Regular))
+                        using (SolidBrush tb = new SolidBrush(itemColor))
+                        {
+                            SizeF sz = g.MeasureString(sub.Label, sf);
+                            g.DrawString(sub.Label, sf, tb, cx - sz.Width / 2, cy - sz.Height / 2);
+                        }
+                    }
+                    else
+                    {
+                        // 绘制粗细圆点
+                        int dotSize = (int)(sub.SizeValue * 1.5f + 4);
+                        using (SolidBrush db = new SolidBrush(itemColor))
+                        {
+                            g.FillEllipse(db, cx - dotSize / 2, cy - dotSize / 2, dotSize, dotSize);
+                        }
                     }
                 }
                 else
                 {
-                    // 颜色色块
                     bool isSelected = (_activeColor == sub.ColorValue);
                     bool isHover = (sub == _hoveredSub);
 
@@ -1291,13 +1498,11 @@ namespace RubickSnipper
                         g.FillEllipse(cb, sub.Bounds);
                     }
 
-                    // 细边框
                     using (Pen cp = new Pen(Color.FromArgb(203, 213, 225), 1))
                     {
                         g.DrawEllipse(cp, sub.Bounds);
                     }
 
-                    // 选中状态外环
                     if (isSelected)
                     {
                         using (Pen ringPen = new Pen(Color.FromArgb(2, 132, 199), 2f))
@@ -1360,6 +1565,12 @@ namespace RubickSnipper
                             g.FillRectangle(b, cx + 1, cy + 1, 5, 5);
                         }
                         break;
+                    case "text":
+                        // 绘制文字标注 "T" 图标
+                        g.DrawLine(p, cx - 6, cy - 6, cx + 6, cy - 6);
+                        g.DrawLine(p, cx, cy - 6, cx, cy + 6);
+                        g.DrawLine(p, cx - 3, cy + 6, cx + 3, cy + 6);
+                        break;
                     case "undo":
                         g.DrawArc(p, cx - 7, cy - 5, 13, 11, 0, -210);
                         g.DrawLine(p, cx - 7, cy - 1, cx - 7, cy + 4);
@@ -1369,6 +1580,11 @@ namespace RubickSnipper
                         g.DrawArc(p, cx - 6, cy - 5, 13, 11, 180, 210);
                         g.DrawLine(p, cx + 7, cy - 1, cx + 7, cy + 4);
                         g.DrawLine(p, cx + 7, cy - 1, cx + 2, cy - 1);
+                        break;
+                    case "cancel":
+                        // 放弃截图叉号 (✕)
+                        g.DrawLine(p, cx - 5, cy - 5, cx + 5, cy + 5);
+                        g.DrawLine(p, cx + 5, cy - 5, cx - 5, cy + 5);
                         break;
                     case "save":
                         g.DrawRectangle(p, cx - 6, cy - 6, 12, 12);
@@ -1400,6 +1616,7 @@ namespace RubickSnipper
 
         private void ClearAnnotations()
         {
+            CancelActiveText();
             foreach (var ann in _annotations) ann.Dispose();
             _annotations.Clear();
             ClearRedoStack();
@@ -1420,6 +1637,7 @@ namespace RubickSnipper
         {
             if (disposing)
             {
+                CancelActiveText();
                 ClearAnnotations();
                 _maskBrush.Dispose();
                 _borderPen.Dispose();

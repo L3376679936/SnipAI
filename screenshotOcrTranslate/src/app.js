@@ -374,8 +374,12 @@ const cfgTranslateModel = document.getElementById('cfgTranslateModel');
 const toastBar = document.getElementById('toastBar');
 
 let currentImageBase64 = null;
+let rawImageBase64 = null;
 let isTranslating = false;
 let isOcring = false;
+
+const imageLightbox = document.getElementById('imageLightbox');
+const lightboxImg = document.getElementById('lightboxImg');
 
 function showToast(msg, duration = 2000) {
   toastBar.textContent = msg;
@@ -419,12 +423,13 @@ function compressImageIfNeeded(base64Data, maxWidth = 1200, maxHeight = 800) {
 
 async function handleNewImage(rawBase64) {
   if (!rawBase64) return;
+  rawImageBase64 = rawBase64;
   const base64Data = await compressImageIfNeeded(rawBase64);
   currentImageBase64 = base64Data;
 
   emptyGuide.style.display = 'none';
   thumbWrap.style.display = 'flex';
-  thumbImg.src = base64Data;
+  thumbImg.src = rawBase64; // 缩略图使用完整高保真原图
   sourceEditor.value = '';
   translationView.textContent = '';
   updateCharCount();
@@ -655,6 +660,7 @@ btnCopyTranslation.addEventListener('click', () => {
 
 btnClearSource.addEventListener('click', () => {
   currentImageBase64 = null;
+  rawImageBase64 = null;
   emptyGuide.style.display = 'flex';
   thumbWrap.style.display = 'none';
   thumbImg.src = '';
@@ -663,6 +669,21 @@ btnClearSource.addEventListener('click', () => {
   updateCharCount();
   showToast('已清空');
 });
+
+// 点击缩略图放大查看整张高清完整截图
+thumbImg.addEventListener('click', () => {
+  if (rawImageBase64 && imageLightbox && lightboxImg) {
+    lightboxImg.src = rawImageBase64;
+    imageLightbox.classList.add('active');
+  }
+});
+
+// 点击模态框任意位置关闭大图
+if (imageLightbox) {
+  imageLightbox.addEventListener('click', () => {
+    imageLightbox.classList.remove('active');
+  });
+}
 
 sourceEditor.addEventListener('input', updateCharCount);
 
@@ -696,6 +717,10 @@ window.addEventListener('paste', (e) => {
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r') {
     location.reload();
+  } else if (e.key === 'Escape') {
+    if (imageLightbox && imageLightbox.classList.contains('active')) {
+      imageLightbox.classList.remove('active');
+    }
   }
 });
 

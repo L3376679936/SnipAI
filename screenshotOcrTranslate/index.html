@@ -12,7 +12,13 @@
   <!-- 顶部栏 -->
   <header class="app-header">
     <div class="brand">
-      <img src="https://img.icons8.com/fluency/96/screenshot.png" alt="logo" class="brand-icon">
+      <div class="brand-icon-wrap">
+        <svg class="brand-icon-svg" viewBox="0 0 24 24" width="22" height="22">
+          <rect x="2" y="2" width="20" height="20" rx="5" fill="#3B82F6"/>
+          <path d="M7 9V7h2M15 7h2v2M7 15v2h2M17 15v2h-2" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="12" cy="12" r="2.5" fill="#FFFFFF"/>
+        </svg>
+      </div>
       <span class="brand-title">截图 OCR & 智能翻译</span>
     </div>
     <div class="header-actions">
@@ -99,7 +105,7 @@
         <div id="translationView" class="translation-result"></div>
       </div>
       <div class="panel-footer">
-        <span id="transStatusTip" style="font-size: 11px; color: var(--text-muted);">就绪 · v1.2 (Snipaste交互升级版)</span>
+        <span id="transStatusTip" style="font-size: 11px; color: var(--text-muted);">就绪 · v1.3 (Snipaste文本与高清预览版)</span>
       </div>
     </section>
   </main>
@@ -153,6 +159,14 @@
 
   <!-- Toast 提示条 -->
   <div id="toastBar" class="toast-bar">提示信息</div>
+
+  <!-- 原图大图预览模态框 -->
+  <div id="imageLightbox" class="modal-overlay" style="z-index: 1000; cursor: zoom-out;">
+    <div style="max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative;">
+      <img id="lightboxImg" src="" alt="大图预览" style="max-width: 100%; max-height: 85vh; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); object-fit: contain;">
+      <span style="color: #ffffff; font-size: 12px; margin-top: 8px; background: rgba(0,0,0,0.6); padding: 4px 10px; border-radius: 4px;">点击任意位置或按 Esc 关闭大图</span>
+    </div>
+  </div>
 
   <!-- 主业务逻辑 (标准本地脚本模式，无 file:// 协议 CORS 拦截) -->
   <script src="src/app.js"></script>
