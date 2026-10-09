@@ -15,4 +15,4 @@
 - 确立实验室目录架构：`utools_lab` 统一作为插件合集仓，为本插件创建专属独立目录 `screenshotOcrTranslate`，便于后续扩展孵化更多插件。
 - 彻底摒弃对本机外部安装软件的依赖，使用 C# 原生编写轻量跨屏选区截屏器源码 `src/snipper/Program.cs`，并使用 Windows 原生编译器编译为 `bin/snipper.exe`（自包含、仅 16KB、零外部依赖）。
 - 彻底根治内存堆积与系统假死现象：使用“四矩形几何遮罩法”剔除全景位图的重复缓存，马赛克改为仅针对局部区域按需生成；在程序退出时显式执行 `Dispose()` 与垃圾回收 `GC.Collect()`。
-- 前端引入 Canvas 智能图片内存防膨胀压缩机制，防止大分辨率截图导致 V8 引擎堆内存暴涨。
+- 解决 API 配置丢失问题：针对 Rubick 无痕/临时 session 下 `localStorage` 会被清空的特性，在 `preload.js` 引入系统用户主目录持久化文件（`~/.rubick_ocr_translate_config.json`），实现保存一次永久保留。
