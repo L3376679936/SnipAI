@@ -52,6 +52,11 @@ namespace RubickSnipper
                     }
                     else
                     {
+                        if (form.IsColorCopied)
+                        {
+                            Console.WriteLine("ACTION:COPY_COLOR:" + form.CopiedColorString);
+                            return 0; // 取色成功复制到剪贴板
+                        }
                         Console.WriteLine("ACTION:CANCEL");
                         return 1; // 取消
                     }
@@ -481,6 +486,19 @@ namespace RubickSnipper
 
         public Bitmap CroppedResult { get; private set; }
         public bool IsOcrRequested { get; private set; }
+        public bool IsColorCopied { get; private set; }
+        public string CopiedColorString { get; private set; }
+
+        // Snipaste 经典像素放大镜与取色 HUD
+        private Point _currentMousePos;
+        private bool _isColorHexMode = false;
+
+        private Color GetPixelColorSafe(int x, int y)
+        {
+            if (_fullBmp == null) return Color.Black;
+            if (x < 0 || x >= _fullBmp.Width || y < 0 || y >= _fullBmp.Height) return Color.Black;
+            return _fullBmp.GetPixel(x, y);
+        }
 
         public SnipperForm(Bitmap fullBmp, Rectangle bounds)
         {
@@ -1027,6 +1045,12 @@ namespace RubickSnipper
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
+            _currentMousePos = e.Location;
+            if (!_isSelecting && !_hasSelected)
+            {
+                Invalidate();
+            }
+
             if (_hasSelected && _activeTextBox == null)
             {
                 ToolButton foundBtn = null;
@@ -1294,6 +1318,29 @@ namespace RubickSnipper
 
         protected override void OnKeyDown(KeyEventArgs e)
         {
+            // 取色器快捷操作 (框选前有效)
+            if (!_isSelecting && !_hasSelected)
+            {
+                if (e.KeyCode == Keys.ShiftKey || e.KeyCode == Keys.Shift)
+                {
+                    _isColorHexMode = !_isColorHexMode;
+                    Invalidate();
+                    return;
+                }
+                else if (e.KeyCode == Keys.C)
+                {
+                    Color c = GetPixelColorSafe(_currentMousePos.X, _currentMousePos.Y);
+                    string colorStr = _isColorHexMode
+                        ? string.Format("#{0:X2}{1:X2}{2:X2}", c.R, c.G, c.B)
+                        : string.Format("{0}, {1}, {2}", c.R, c.G, c.B);
+                    Clipboard.SetText(colorStr);
+                    this.IsColorCopied = true;
+                    this.CopiedColorString = colorStr;
+                    CancelCrop();
+                    return;
+                }
+            }
+
             if (e.KeyCode == Keys.Escape)
             {
                 if (_activeTextBox != null)
@@ -1761,17 +1808,145 @@ namespace RubickSnipper
             }
             else if (!_isSelecting && !_hasSelected)
             {
-                string guide = "请按住鼠标左键拖拽框选区域 (Esc 取消)";
-                SizeF size = g.MeasureString(guide, _uiFont);
-                float tipX = (this.Width - size.Width) / 2;
-                float tipY = (this.Height - size.Height) / 2;
+                DrawColorPickerMagnifier(g, _currentMousePos);
+            }
+        }
 
-                using (SolidBrush bgBrush = new SolidBrush(Color.FromArgb(220, 15, 23, 42)))
-                using (SolidBrush textBrush = new SolidBrush(Color.White))
+        private void DrawColorPickerMagnifier(Graphics g, Point pt)
+        {
+            int gridCols = 17;
+            int gridRows = 11;
+            int cellSize = 8;
+            int magW = gridCols * cellSize; // 136
+            int magH = gridRows * cellSize; // 88
+
+            int hudW = magW + 8; // 144
+            int hudH = magH + 88; // 176
+
+            // 智能避让屏幕边缘（默认在鼠标右下方，靠近边缘时自动翻转到左侧或上方）
+            int hx = pt.X + 18;
+            int hy = pt.Y + 18;
+
+            if (hx + hudW > this.Width - 6) hx = pt.X - hudW - 18;
+            if (hy + hudH > this.Height - 6) hy = pt.Y - hudH - 18;
+
+            if (hx < 4) hx = 4;
+            if (hy < 4) hy = 4;
+
+            // 1. 整体微阴影与纯黑卡片底
+            Rectangle cardRect = new Rectangle(hx, hy, hudW, hudH);
+            DrawCardShadow(g, cardRect, 3);
+            using (SolidBrush bg = new SolidBrush(Color.FromArgb(248, 10, 15, 26)))
+            using (Pen borderPen = new Pen(Color.FromArgb(100, 148, 163, 184), 1f))
+            {
+                g.FillRectangle(bg, cardRect);
+                g.DrawRectangle(borderPen, cardRect);
+            }
+
+            // 2. 放大镜采样像素格绘制
+            int magX = hx + 4;
+            int magY = hy + 4;
+            Rectangle magRect = new Rectangle(magX, magY, magW, magH);
+
+            int centerCol = gridCols / 2; // 8
+            int centerRow = gridRows / 2; // 5
+
+            for (int r = 0; r < gridRows; r++)
+            {
+                int sy = pt.Y + (r - centerRow);
+                for (int c = 0; c < gridCols; c++)
                 {
-                    g.FillRectangle(bgBrush, tipX - 14, tipY - 10, size.Width + 28, size.Height + 20);
-                    g.DrawString(guide, _uiFont, textBrush, tipX, tipY);
+                    int sx = pt.X + (c - centerCol);
+                    Color pxColor = GetPixelColorSafe(sx, sy);
+                    using (SolidBrush pb = new SolidBrush(pxColor))
+                    {
+                        g.FillRectangle(pb, magX + c * cellSize, magY + r * cellSize, cellSize, cellSize);
+                    }
                 }
+            }
+
+            // 3. 像素网格浅细线 (微弱半透明)
+            using (Pen gridPen = new Pen(Color.FromArgb(24, 255, 255, 255), 1f))
+            {
+                for (int c = 1; c < gridCols; c++)
+                {
+                    g.DrawLine(gridPen, magX + c * cellSize, magY, magX + c * cellSize, magY + magH);
+                }
+                for (int r = 1; r < gridRows; r++)
+                {
+                    g.DrawLine(gridPen, magX, magY + r * cellSize, magX + magW, magY + r * cellSize);
+                }
+            }
+
+            // 4. 十字瞄准微光导轨 (高亮整行整列)
+            using (SolidBrush crossBrush = new SolidBrush(Color.FromArgb(50, 59, 130, 246)))
+            {
+                g.FillRectangle(crossBrush, magX, magY + centerRow * cellSize, magW, cellSize);
+                g.FillRectangle(crossBrush, magX + centerCol * cellSize, magY, cellSize, magH);
+            }
+
+            // 5. 正中心准心框 (8x8 小方框，白内黑外高对比度)
+            Rectangle centerCell = new Rectangle(magX + centerCol * cellSize, magY + centerRow * cellSize, cellSize, cellSize);
+            using (Pen wp = new Pen(Color.White, 1.5f))
+            using (Pen bp = new Pen(Color.Black, 1f))
+            {
+                g.DrawRectangle(wp, centerCell);
+                g.DrawRectangle(bp, centerCell.X - 1, centerCell.Y - 1, centerCell.Width + 2, centerCell.Height + 2);
+            }
+
+            // 放大镜外围 1.2px 纯白边框
+            using (Pen magBorder = new Pen(Color.White, 1.2f))
+            {
+                g.DrawRectangle(magBorder, magRect);
+            }
+
+            // 6. 坐标与颜色信息区
+            Color centerColor = GetPixelColorSafe(pt.X, pt.Y);
+            int infoY = magY + magH + 8;
+
+            // 6.1 居中显示坐标 (X , Y)
+            string coordStr = string.Format("({0} , {1})", pt.X, pt.Y);
+            using (Font cf = new Font("Segoe UI", 9.5f, FontStyle.Bold))
+            using (SolidBrush cw = new SolidBrush(Color.White))
+            {
+                SizeF csz = g.MeasureString(coordStr, cf);
+                g.DrawString(coordStr, cf, cw, hx + (hudW - csz.Width) / 2, infoY);
+            }
+
+            infoY += 19;
+
+            // 6.2 颜色方块 + 颜色数值 (例如 "16,  16,  16" 或 "#101010")
+            string colorValStr = _isColorHexMode
+                ? string.Format("#{0:X2}{1:X2}{2:X2}", centerColor.R, centerColor.G, centerColor.B)
+                : string.Format("{0},  {1},  {2}", centerColor.R, centerColor.G, centerColor.B);
+
+            int sampleBoxSize = 11;
+            using (Font vf = new Font("Segoe UI", 9.5f, FontStyle.Bold))
+            using (SolidBrush vw = new SolidBrush(Color.White))
+            using (SolidBrush cb = new SolidBrush(centerColor))
+            using (Pen cbp = new Pen(Color.White, 1f))
+            {
+                SizeF vsz = g.MeasureString(colorValStr, vf);
+                int lineW = sampleBoxSize + 7 + (int)vsz.Width;
+                int lineX = hx + (hudW - lineW) / 2;
+
+                g.FillRectangle(cb, lineX, infoY + 2, sampleBoxSize, sampleBoxSize);
+                g.DrawRectangle(cbp, lineX, infoY + 2, sampleBoxSize, sampleBoxSize);
+                g.DrawString(colorValStr, vf, vw, lineX + sampleBoxSize + 7, infoY);
+            }
+
+            infoY += 21;
+
+            // 6.3 快捷键操作提示行 (按 C 复制颜色值 / 按 Shift 切换 RGB/HEX)
+            using (Font tf = new Font("Microsoft YaHei", 8f))
+            using (SolidBrush tw = new SolidBrush(Color.FromArgb(220, 255, 255, 255)))
+            {
+                string tip1 = "按 C 复制颜色值";
+                string tip2 = "按 Shift 切换 RGB/HEX";
+                SizeF t1sz = g.MeasureString(tip1, tf);
+                SizeF t2sz = g.MeasureString(tip2, tf);
+                g.DrawString(tip1, tf, tw, hx + (hudW - t1sz.Width) / 2, infoY);
+                g.DrawString(tip2, tf, tw, hx + (hudW - t2sz.Width) / 2, infoY + 14);
             }
         }
 

@@ -619,6 +619,12 @@ async function triggerTranslation(textToTranslate) {
 
 const captureManager = new ScreenCaptureManager({
   onComplete: (res) => {
+    // 若用户按 C 取色，颜色值已复制到剪贴板
+    if (res && res.action === 'copy_color') {
+      showToast(`✓ 已取色并复制到剪贴板: ${res.color || ''}`);
+      return;
+    }
+
     // 若用户仅点击了【确定截图 ✔】或双击，仅复制到剪贴板，不触发 OCR
     if (res && res.action === 'copy') {
       showToast('✓ 截图已复制到系统剪贴板');

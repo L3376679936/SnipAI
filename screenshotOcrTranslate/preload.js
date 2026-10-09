@@ -112,6 +112,14 @@ window.nativeBridge = {
           return;
         }
 
+        if (outStr.includes('ACTION:COPY_COLOR')) {
+          const parts = outStr.split('ACTION:COPY_COLOR:');
+          const colorVal = parts[1] ? parts[1].trim() : '';
+          logDebug(`用户使用取色器复制颜色值: ${colorVal}`);
+          resolve({ action: 'copy_color', color: colorVal });
+          return;
+        }
+
         const isOcrAction = outStr.includes('ACTION:OCR') || (err && err.code === 10);
         const isCopyOnly = outStr.includes('ACTION:COPY') || (!isOcrAction && !err);
 
