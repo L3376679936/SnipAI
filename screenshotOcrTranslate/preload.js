@@ -7,10 +7,21 @@ const { execFile } = require('child_process');
 // 统一保存在用户主目录下的持久化配置文件，跨会话/跨重启永不丢失
 const CONFIG_FILE_PATH = path.join(os.homedir(), '.rubick_ocr_translate_config.json');
 
+const LOG_FILE = path.join(os.homedir(), '.rubick_snipper_debug.log');
+function logDebug(msg) {
+  try {
+    fs.appendFileSync(LOG_FILE, `[${new Date().toLocaleTimeString()}] ${msg}\n`);
+  } catch (e) {}
+}
+
+logDebug(`Preload 初始化: __dirname=${__dirname}`);
+
 /**
  * 宿主与底层能力桥接器 (纯内置自包含实现，无任何外部软件依赖)
  */
 window.nativeBridge = {
+  log: logDebug,
+
   /**
    * 持久化保存大模型配置到本地磁盘文件
    */
@@ -19,7 +30,7 @@ window.nativeBridge = {
       fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(cfg, null, 2), 'utf-8');
       return true;
     } catch (err) {
-      console.error('写入磁盘配置失败:', err);
+      logDebug(`写入配置失败: ${err.message}`);
       return false;
     }
   },
@@ -34,7 +45,7 @@ window.nativeBridge = {
         return JSON.parse(text);
       }
     } catch (err) {
-      console.warn('读取磁盘配置失败:', err);
+      logDebug(`读取磁盘配置失败: ${err.message}`);
     }
     return null;
   },
@@ -44,11 +55,20 @@ window.nativeBridge = {
    */
   captureScreen: () => {
     return new Promise((resolve, reject) => {
+      logDebug('captureScreen 被调用');
       // 1. 隐藏 Rubick 主窗口，露出屏幕全部视野
       window.nativeBridge.hideMainWindow();
 
       // 2. 寻址项目自包含的选区截图程序
-      const snipperExePath = path.join(__dirname, 'bin', 'snipper.exe');
+      let snipperExePath = path.join(__dirname, 'bin', 'snipper.exe');
+      if (!fs.existsSync(snipperExePath)) {
+        // 兜底尝试项目相对路径
+        const fallback = path.resolve(__dirname, '..', 'screenshotOcrTranslate', 'bin', 'snipper.exe');
+        if (fs.existsSync(fallback)) {
+          snipperExePath = fallback;
+        }
+      }
+      logDebug(`snipper.exe 路径: ${snipperExePath}, 存在: ${fs.existsSync(snipperExePath)}`);
 
       // 3. 执行截图程序
       execFile(snipperExePath, (err, stdout, stderr) => {
@@ -56,21 +76,24 @@ window.nativeBridge = {
         window.nativeBridge.showMainWindow();
 
         if (err) {
-          // 退出码为 1 表示用户主动按 Esc 或右键取消了截图
-          console.warn('截图取消或未完成:', err.message);
+          logDebug(`snipper.exe 退出或取消: code=${err.code}, msg=${err.message}`);
           reject(new Error('截图已取消'));
           return;
         }
 
+        logDebug('snipper.exe 成功退出，读取剪贴板');
         // 退出码为 0，说明用户框选完成，图片已精准放入剪贴板
         try {
           const img = clipboard.readImage();
           if (img && !img.isEmpty()) {
+            logDebug('成功从剪贴板读取到图片');
             resolve(img.toDataURL());
             return;
           }
+          logDebug('剪贴板中未检测到图片');
           reject(new Error('未在剪贴板中检测到截取的图片'));
         } catch (clipErr) {
+          logDebug(`读取剪贴板异常: ${clipErr.message}`);
           reject(clipErr);
         }
       });
@@ -141,12 +164,14 @@ window.nativeBridge = {
    * 采用提前捕获 + 缓存重放机制，杜绝因 ES Module 异步加载慢而错过 Rubick 首屏 onPluginEnter 事件
    */
   onPluginEnter: (callback) => {
+    logDebug('前端注册 onPluginEnter, 已有缓存=' + !!_cachedEnterAction);
     _activeEnterCallback = callback;
     if (_cachedEnterAction && callback) {
       try {
+        logDebug('立即重放缓存的 action 给前端');
         callback(_cachedEnterAction);
       } catch (e) {
-        console.error('执行缓存的 onPluginEnter 失败:', e);
+        logDebug('执行缓存的 onPluginEnter 失败: ' + e.message);
       }
     }
   }
@@ -157,6 +182,7 @@ let _cachedEnterAction = null;
 let _activeEnterCallback = null;
 
 const globalEnterDispatcher = (action) => {
+  logDebug('宿主底层派发 onPluginEnter: ' + JSON.stringify(action));
   _cachedEnterAction = action;
   if (_activeEnterCallback) {
     _activeEnterCallback(action);
@@ -164,8 +190,13 @@ const globalEnterDispatcher = (action) => {
 };
 
 if (window.rubick && typeof window.rubick.onPluginEnter === 'function') {
+  logDebug('挂载 window.rubick.onPluginEnter 成功');
   window.rubick.onPluginEnter(globalEnterDispatcher);
 } else if (window.utools && typeof window.utools.onPluginEnter === 'function') {
+  logDebug('挂载 window.utools.onPluginEnter 成功');
   window.utools.onPluginEnter(globalEnterDispatcher);
+} else {
+  logDebug('警告: 未找到 window.rubick 或 window.utools 的 onPluginEnter');
 }
+
 

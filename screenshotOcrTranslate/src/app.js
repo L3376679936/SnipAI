@@ -394,6 +394,13 @@ window.addEventListener('paste', (e) => {
   }
 });
 
+// 支持在窗口内直接按 Ctrl+R 强制刷新重载页面
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r') {
+    location.reload();
+  }
+});
+
 // 默认设置适宜高度
 if (window.nativeBridge && window.nativeBridge.setHeight) {
   window.nativeBridge.setHeight(600);
@@ -402,19 +409,28 @@ if (window.nativeBridge && window.nativeBridge.setHeight) {
 // 自动截图启动状态机
 let hasAutoTriggeredCapture = false;
 
-function triggerAutoCaptureIfEmpty() {
+function triggerAutoCaptureIfEmpty(source) {
+  if (window.nativeBridge && window.nativeBridge.log) {
+    window.nativeBridge.log(`triggerAutoCaptureIfEmpty 收到触发来源: ${source}, hasAutoTriggeredCapture=${hasAutoTriggeredCapture}, hasImage=${!!currentImageBase64}`);
+  }
   if (hasAutoTriggeredCapture) return;
   if (!currentImageBase64) {
     hasAutoTriggeredCapture = true;
+    if (window.nativeBridge && window.nativeBridge.log) {
+      window.nativeBridge.log('准备延时 100ms 唤起 captureManager.startCapture()');
+    }
     setTimeout(() => {
       captureManager.startCapture();
-    }, 150);
+    }, 100);
   }
 }
 
 // 1. 监听 Rubick / uTools 宿主激活
 if (window.nativeBridge && window.nativeBridge.onPluginEnter) {
   window.nativeBridge.onPluginEnter((action) => {
+    if (window.nativeBridge && window.nativeBridge.log) {
+      window.nativeBridge.log(`app.js 收到 onPluginEnter 回调: ${JSON.stringify(action)}`);
+    }
     window.nativeBridge.setHeight(600);
 
     // 如果通过复制外部图片呼出，直接提取
@@ -425,12 +441,13 @@ if (window.nativeBridge && window.nativeBridge.onPluginEnter) {
     }
 
     // 关键字呼出且无图，直接进入截图状态！
-    triggerAutoCaptureIfEmpty();
+    triggerAutoCaptureIfEmpty('onPluginEnter');
   });
 }
 
 // 2. 首屏加载兜底：打开插件无图时自动进入截图模式
 setTimeout(() => {
-  triggerAutoCaptureIfEmpty();
-}, 250);
+  triggerAutoCaptureIfEmpty('DOMContentLoaded/Timeout');
+}, 200);
+
 
