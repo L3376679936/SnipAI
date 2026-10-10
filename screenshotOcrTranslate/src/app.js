@@ -1034,6 +1034,29 @@ if (window.nativeBridge && window.nativeBridge.onPluginEnter) {
     if (window.nativeBridge && window.nativeBridge.log) {
       window.nativeBridge.log(`app.js 收到 onPluginEnter 事件: ${JSON.stringify(action)}`);
     }
+
+    // 判断是否是由 "ocr截图" / "截图" / "截屏" 等独立关键词唤起直接截图
+    const isDirectCapture = action && (
+      action.code === 'direct-capture' ||
+      (typeof action.payload === 'string' && (
+        action.payload === 'ocr截图' ||
+        action.payload === '截图' ||
+        action.payload === '截屏' ||
+        action.payload === '屏幕截图'
+      ))
+    );
+
+    if (isDirectCapture) {
+      hasAutoTriggeredCapture = true;
+      if (window.nativeBridge && window.nativeBridge.log) {
+        window.nativeBridge.log('>>> 匹配到直接截图指令(direct-capture)，立即唤起截图 <<<');
+      }
+      setTimeout(() => {
+        captureManager.startCapture();
+      }, 60);
+      return;
+    }
+
     window.nativeBridge.setHeight(600);
 
     // 如果用户是复制了图片后唤醒插件，直接处理入参图片
