@@ -1,6 +1,6 @@
 /**
- * capture.js - 纯 JS 原生截图标注与悬浮工具栏引擎 (DPI 比例感知 + 智能停靠 + 零跳屏)
- * 1:1 对齐 Snipaste / 原版 C# Snipper 18 项工具与二级属性栏
+ * capture.js - 纯 JS 原生截图标注与悬浮工具栏引擎 (DPI 感知 + 随心平移拖拽 + 1:1 精准标注)
+ * 100% 纯前端零二进制，1:1 对齐 Snipaste 经典交互
  */
 
 (function () {
@@ -59,25 +59,20 @@
   // 核心动作按钮
   const actAiEdit = document.getElementById('actAiEdit');
   const actOcr = document.getElementById('actOcr');
-  const actCancel = document.getElementById('actCancel');
   const actPin = document.getElementById('actPin');
   const actSave = document.getElementById('actSave');
+  const actCancel = document.getElementById('actCancel');
   const actConfirm = document.getElementById('actConfirm');
 
-  // 2. 状态变量
-  let stageWidth = 0;   // 逻辑宽度 (CSS px)
-  let stageHeight = 0;  // 逻辑高度 (CSS px)
-  let physicalW = 0;    // 物理分辨率
-  let physicalH = 0;    // 物理分辨率
-  let scaleRatioX = 1;  // 物理 / 逻辑 缩放比
-  let scaleRatioY = 1;
-
-  let fullSnapshotImg = null;
-  let sourceOffscreenCanvas = null; // 1:1 物理像素纯净缓冲
-  let sourceOffscreenCtx = null;
+  // 2. 核心状态机
   let isStageLoaded = false;
+  let fullSnapshotImg = null;
+  let physicalW = 0;
+  let physicalH = 0;
+  let stageWidth = 0;
+  let stageHeight = 0;
 
-  let activeTool = null; // 当前激活工具
+  let activeTool = null; // 当前激活工具 (null 表示未激活工具，处于选区拖拽移动模式)
   let activeColor = '#ef4444';
   let activeSize = 4;
   let isFilled = false;
@@ -91,14 +86,14 @@
   let isFontItalic = false;
   let hasTextBg = false;
 
-  // 绘图与拖拽
+  // 绘图状态
   let isDrawing = false;
   let drawStart = { x: 0, y: 0 };
   let brushPoints = [];
   let currentTextX = 0;
   let currentTextY = 0;
 
-  // 窗口平移
+  // 窗口平移拖拽状态
   let isWindowMoving = false;
   let winDragStart = { x: 0, y: 0 };
 
@@ -107,6 +102,14 @@
   let redoHistory = [];
   let recordedBoxes = [];
   let recordedTextNotes = [];
+
+  // 建立与宿主 preload 的原生平移广播通道
+  let bridgeChannel = null;
+  try {
+    bridgeChannel = new BroadcastChannel('snipai_capture_channel');
+  } catch (e) {
+    console.warn('BroadcastChannel 创建失败:', e);
+  }
 
   /**
    * 3. 核心初始化：解析物理/逻辑像素并建立画布渲染
@@ -123,42 +126,33 @@
       physicalW = initPayload.physW || fullSnapshotImg.naturalWidth;
       physicalH = initPayload.physH || fullSnapshotImg.naturalHeight;
 
-      // 严格除以 DPI scaleFactor 得到屏幕实际逻辑尺寸，彻底解决自动放大全屏问题！
+      // 严格除以 DPI scaleFactor 换算屏幕逻辑尺寸，杜绝画面撑爆屏幕
       stageWidth = initPayload.logicalW || Math.round(physicalW / deviceScale);
       stageHeight = initPayload.logicalH || Math.round(physicalH / deviceScale);
 
-      scaleRatioX = physicalW / Math.max(1, stageWidth);
-      scaleRatioY = physicalH / Math.max(1, stageHeight);
-
-      // 设置舞台 CSS 尺寸
+      // 设置舞台 CSS 尺寸与默认光标
       stageContainer.style.width = stageWidth + 'px';
       stageContainer.style.height = stageHeight + 'px';
+      stageContainer.style.cursor = 'move'; // 默认未选工具时为平移移动手势
 
-      // Canvas 像素宽度设为物理高清像素，CSS 尺寸设为逻辑像素
-      bgCanvas.width = physicalW;
-      bgCanvas.height = physicalH;
+      // 画布像素尺寸与 CSS 尺寸 1:1 严格对齐逻辑像素，消除一切坐标错位
+      bgCanvas.width = stageWidth;
+      bgCanvas.height = stageHeight;
       bgCanvas.style.width = stageWidth + 'px';
       bgCanvas.style.height = stageHeight + 'px';
 
-      annotCanvas.width = physicalW;
-      annotCanvas.height = physicalH;
+      annotCanvas.width = stageWidth;
+      annotCanvas.height = stageHeight;
       annotCanvas.style.width = stageWidth + 'px';
       annotCanvas.style.height = stageHeight + 'px';
 
-      // 离屏物理采样缓冲 (用于马赛克与干净导出)
-      sourceOffscreenCanvas = document.createElement('canvas');
-      sourceOffscreenCanvas.width = physicalW;
-      sourceOffscreenCanvas.height = physicalH;
-      sourceOffscreenCtx = sourceOffscreenCanvas.getContext('2d');
-      sourceOffscreenCtx.drawImage(fullSnapshotImg, 0, 0, physicalW, physicalH);
-
       // 绘制背景底图
-      bgCtx.drawImage(fullSnapshotImg, 0, 0, physicalW, physicalH);
+      bgCtx.drawImage(fullSnapshotImg, 0, 0, stageWidth, stageHeight);
 
       // 选区左上角尺寸标签
       sizeBadge.textContent = `${stageWidth} × ${stageHeight} px`;
 
-      // 智能定位悬浮工具栏 (保证永不超出版面、永不丢失)
+      // 智能定位悬浮工具栏 (保证永不超出版面)
       updateToolbarPosition();
 
       clearAnnotations();
@@ -171,7 +165,7 @@
     initCaptureStage(payload);
   };
 
-  // 兜底：从本地临时文件读取 (彻底根治 executeJavaScript 异步时序竞争)
+  // 兜底：从本地临时文件读取 (防时序竞争)
   function tryAutoLoadFromDisk() {
     if (isStageLoaded) return;
     try {
@@ -191,22 +185,18 @@
     }
   }
 
-  // DOM 就绪立即主动读盘尝试一次
   window.addEventListener('DOMContentLoaded', () => {
     tryAutoLoadFromDisk();
   });
-  // 脚本载入立即也尝试一次
   tryAutoLoadFromDisk();
 
   /**
-   * 4. 智能排布悬浮工具栏 (1:1 对齐 Snipaste：下方空间不足时翻入图片内侧右下角)
+   * 4. 智能排布悬浮工具栏 (下方空间不足时翻入截图内部右下角，1:1 对齐 Snipaste)
    */
   function updateToolbarPosition() {
     const tbHeight = subPalette.style.display === 'flex' ? 76 : 38;
     const winH = window.innerHeight || (stageHeight + 90);
 
-    // 如果图片下方有足够空间放工具栏，停靠在图片外侧下方；
-    // 如果图片几乎占满窗口或在屏幕边缘，智能翻转停靠在截图内部右下角，确保 100% 可见！
     if (winH - stageHeight >= tbHeight + 8) {
       toolbarWrap.style.top = (stageHeight + 6) + 'px';
       toolbarWrap.style.bottom = 'auto';
@@ -222,7 +212,7 @@
   });
 
   /**
-   * 5. 绘图管线与高清 Canvas 渲染
+   * 5. 核心图元统一渲染器 (屏幕渲染与物理高清导出共用同一份逻辑)
    */
   function applyStrokeStyles(ctx, item) {
     ctx.strokeStyle = item.color;
@@ -237,59 +227,75 @@
     }
   }
 
+  function renderSingleItem(ctx, item) {
+    ctx.save();
+    applyStrokeStyles(ctx, item);
+
+    if (item.type === 'rect') {
+      if (item.isFilled) ctx.fillRect(item.x, item.y, item.w, item.h);
+      else ctx.strokeRect(item.x, item.y, item.w, item.h);
+    } else if (item.type === 'ellipse') {
+      ctx.beginPath();
+      ctx.ellipse(item.x + item.w / 2, item.y + item.h / 2, Math.abs(item.w / 2), Math.abs(item.h / 2), 0, 0, Math.PI * 2);
+      if (item.isFilled) ctx.fill();
+      else ctx.stroke();
+    } else if (item.type === 'arrow') {
+      drawArrow(ctx, item.x1, item.y1, item.x2, item.y2, item.size, item.arrowStyle);
+    } else if (item.type === 'line') {
+      ctx.beginPath();
+      ctx.moveTo(item.x1, item.y1);
+      ctx.lineTo(item.x2, item.y2);
+      ctx.stroke();
+    } else if (item.type === 'brush') {
+      drawBrushPath(ctx, item.points, item.size);
+    } else if (item.type === 'marker') {
+      ctx.globalAlpha = 0.35;
+      drawBrushPath(ctx, item.points, item.size);
+    } else if (item.type === 'mosaic') {
+      drawMosaic(ctx, item.x, item.y, item.w, item.h, item.radius);
+    } else if (item.type === 'blur') {
+      drawBlur(ctx, item.x, item.y, item.w, item.h, item.radius);
+    } else if (item.type === 'number') {
+      drawNumberBadge(ctx, item.x, item.y, item.num, item.color);
+    } else if (item.type === 'text') {
+      drawTextItem(ctx, item);
+    }
+
+    ctx.restore();
+  }
+
   function renderActiveDrawing(curX, curY) {
     redrawAnnotations();
-
-    annotCtx.save();
-    annotCtx.scale(scaleRatioX, scaleRatioY);
-    annotCtx.beginPath();
-    annotCtx.rect(0, 0, stageWidth, stageHeight);
-    annotCtx.clip();
-
-    const tempItem = {
-      color: activeColor,
-      size: activeSize,
-      isDashed,
-      isFilled
-    };
-    applyStrokeStyles(annotCtx, tempItem);
 
     const minX = Math.min(drawStart.x, curX);
     const minY = Math.min(drawStart.y, curY);
     const w = Math.abs(curX - drawStart.x);
     const h = Math.abs(curY - drawStart.y);
 
-    if (activeTool === 'rect') {
-      if (isFilled) annotCtx.fillRect(minX, minY, w, h);
-      else annotCtx.strokeRect(minX, minY, w, h);
-    } else if (activeTool === 'ellipse') {
-      annotCtx.beginPath();
-      annotCtx.ellipse(minX + w / 2, minY + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
-      if (isFilled) annotCtx.fill();
-      else annotCtx.stroke();
-    } else if (activeTool === 'arrow') {
-      drawArrow(annotCtx, drawStart.x, drawStart.y, curX, curY, activeSize, arrowStyle);
-    } else if (activeTool === 'line') {
-      annotCtx.beginPath();
-      annotCtx.moveTo(drawStart.x, drawStart.y);
-      annotCtx.lineTo(curX, curY);
-      annotCtx.stroke();
-    } else if (activeTool === 'brush') {
+    if (activeTool === 'brush' || activeTool === 'marker') {
       brushPoints.push({ x: curX, y: curY });
-      drawBrushPath(annotCtx, brushPoints, activeSize);
-    } else if (activeTool === 'marker') {
-      brushPoints.push({ x: curX, y: curY });
-      annotCtx.save();
-      annotCtx.globalAlpha = 0.35;
-      drawBrushPath(annotCtx, brushPoints, Math.max(12, activeSize * 3));
-      annotCtx.restore();
-    } else if (activeTool === 'mosaic') {
-      drawMosaic(annotCtx, minX, minY, w, h, mosaicRadius);
-    } else if (activeTool === 'blur') {
-      drawBlur(annotCtx, minX, minY, w, h, mosaicRadius);
     }
 
-    annotCtx.restore();
+    const tempItem = {
+      type: activeTool,
+      color: activeColor,
+      size: activeTool === 'marker' ? Math.max(12, activeSize * 3) : activeSize,
+      isDashed,
+      isFilled,
+      arrowStyle,
+      radius: mosaicRadius,
+      x: minX,
+      y: minY,
+      w,
+      h,
+      x1: drawStart.x,
+      y1: drawStart.y,
+      x2: curX,
+      y2: curY,
+      points: brushPoints
+    };
+
+    renderSingleItem(annotCtx, tempItem);
   }
 
   function commitActiveDrawing(curX, curY) {
@@ -329,60 +335,10 @@
   }
 
   function redrawAnnotations() {
-    annotCtx.clearRect(0, 0, physicalW, physicalH);
-
-    annotCtx.save();
-    annotCtx.scale(scaleRatioX, scaleRatioY);
-    annotCtx.beginPath();
-    annotCtx.rect(0, 0, stageWidth, stageHeight);
-    annotCtx.clip();
-
+    annotCtx.clearRect(0, 0, stageWidth, stageHeight);
     for (const item of annotHistory) {
-      annotCtx.save();
-      applyStrokeStyles(annotCtx, item);
-
-      if (item.type === 'rect') {
-        if (item.isFilled) annotCtx.fillRect(item.x, item.y, item.w, item.h);
-        else annotCtx.strokeRect(item.x, item.y, item.w, item.h);
-      } else if (item.type === 'ellipse') {
-        annotCtx.beginPath();
-        annotCtx.ellipse(item.x + item.w / 2, item.y + item.h / 2, item.w / 2, item.h / 2, 0, 0, Math.PI * 2);
-        if (item.isFilled) annotCtx.fill();
-        else annotCtx.stroke();
-      } else if (item.type === 'arrow') {
-        drawArrow(annotCtx, item.x1, item.y1, item.x2, item.y2, item.size, item.arrowStyle);
-      } else if (item.type === 'line') {
-        annotCtx.beginPath();
-        annotCtx.moveTo(item.x1, item.y1);
-        annotCtx.lineTo(item.x2, item.y2);
-        annotCtx.stroke();
-      } else if (item.type === 'brush') {
-        drawBrushPath(annotCtx, item.points, item.size);
-      } else if (item.type === 'marker') {
-        annotCtx.globalAlpha = 0.35;
-        drawBrushPath(annotCtx, item.points, item.size);
-      } else if (item.type === 'mosaic') {
-        drawMosaic(annotCtx, item.x, item.y, item.w, item.h, item.radius);
-      } else if (item.type === 'blur') {
-        drawBlur(annotCtx, item.x, item.y, item.w, item.h, item.radius);
-      } else if (item.type === 'number') {
-        drawNumberBadge(annotCtx, item.x, item.y, item.num, item.color);
-      } else if (item.type === 'text') {
-        annotCtx.textBaseline = 'top';
-        annotCtx.font = `${item.italic ? 'italic ' : ''}${item.bold ? 'bold ' : ''}${item.fontSize || 16}px sans-serif`;
-        if (item.hasBg) {
-          const txtW = annotCtx.measureText(item.text).width;
-          annotCtx.fillStyle = 'rgba(0, 0, 0, 0.72)';
-          annotCtx.fillRect(item.x - 3, item.y - 2, txtW + 6, (item.fontSize || 16) + 4);
-        }
-        annotCtx.fillStyle = item.color;
-        annotCtx.fillText(item.text, item.x, item.y);
-      }
-
-      annotCtx.restore();
+      renderSingleItem(annotCtx, item);
     }
-
-    annotCtx.restore();
   }
 
   function clearAnnotations() {
@@ -390,7 +346,7 @@
     redoHistory = [];
     recordedBoxes = [];
     recordedTextNotes = [];
-    annotCtx.clearRect(0, 0, physicalW, physicalH);
+    annotCtx.clearRect(0, 0, stageWidth, stageHeight);
   }
 
   function drawArrow(ctx, x1, y1, x2, y2, size, style = 'single') {
@@ -426,7 +382,7 @@
   }
 
   function drawBrushPath(ctx, points, size) {
-    if (points.length < 2) return;
+    if (!points || points.length < 2) return;
     ctx.lineWidth = size;
     ctx.beginPath();
     ctx.moveTo(points[0].x, points[0].y);
@@ -437,14 +393,14 @@
   }
 
   /**
-   * 6. 马赛克 (Pixelate) 算法：精准采样，彻底防越界与异常
+   * 6. 马赛克 (Pixelate) 算法：从底图平稳采样，绝不越界
    */
   function drawMosaic(ctx, mx, my, mw, mh, radius = 8) {
     mx = Math.round(mx);
     my = Math.round(my);
     mw = Math.round(mw);
     mh = Math.round(mh);
-    if (mw < 2 || mh < 2 || !sourceOffscreenCtx) return;
+    if (mw < 2 || mh < 2) return;
 
     const blockSize = Math.max(4, Math.round(radius));
     const safeW = Math.min(mw, stageWidth - mx);
@@ -452,20 +408,14 @@
     if (safeW <= 0 || safeH <= 0) return;
 
     try {
-      const pMx = Math.round(mx * scaleRatioX);
-      const pMy = Math.round(my * scaleRatioY);
-      const pMw = Math.round(safeW * scaleRatioX);
-      const pMh = Math.round(safeH * scaleRatioY);
-      if (pMw <= 0 || pMh <= 0) return;
-
-      const imgData = sourceOffscreenCtx.getImageData(pMx, pMy, pMw, pMh);
+      const imgData = bgCtx.getImageData(mx, my, safeW, safeH);
       const data = imgData.data;
 
       for (let y = 0; y < safeH; y += blockSize) {
         for (let x = 0; x < safeW; x += blockSize) {
-          const samplePx = Math.min(Math.floor(x * scaleRatioX), pMw - 1);
-          const samplePy = Math.min(Math.floor(y * scaleRatioY), pMh - 1);
-          const pIndex = (samplePy * pMw + samplePx) * 4;
+          const px = Math.min(x, safeW - 1);
+          const py = Math.min(y, safeH - 1);
+          const pIndex = (py * safeW + px) * 4;
           const r = data[pIndex];
           const g = data[pIndex + 1];
           const b = data[pIndex + 2];
@@ -494,7 +444,7 @@
       ctx.rect(mx, my, mw, mh);
       ctx.clip();
       ctx.filter = `blur(${Math.max(2, Math.round(radius / 2))}px)`;
-      ctx.drawImage(bgCanvas, 0, 0, physicalW, physicalH, 0, 0, stageWidth, stageHeight);
+      ctx.drawImage(bgCanvas, 0, 0, stageWidth, stageHeight);
       ctx.restore();
     } catch (err) {
       console.error('drawBlur 执行异常:', err);
@@ -544,9 +494,9 @@
       } else if (it.type === 'number') {
         hit = Math.hypot(x - it.x, y - it.y) <= 15;
       } else if (it.type === 'text') {
-        hit = x >= it.x - 4 && x <= it.x + 120 && y >= it.y - 4 && y <= it.y + (it.fontSize || 16) + 4;
+        hit = x >= it.x - 4 && x <= it.x + 160 && y >= it.y - 4 && y <= it.y + (it.fontSize || 16) * 1.5;
       } else if (it.type === 'brush' || it.type === 'marker') {
-        hit = it.points.some(p => Math.hypot(x - p.x, y - p.y) <= Math.max(8, it.size));
+        hit = it.points && it.points.some(p => Math.hypot(x - p.x, y - p.y) <= Math.max(8, it.size));
       } else if (it.type === 'arrow' || it.type === 'line') {
         hit = Math.hypot(x - it.x1, y - it.y1) + Math.hypot(x - it.x2, y - it.y2) - Math.hypot(it.x1 - it.x2, it.y1 - it.y2) < 4;
       }
@@ -560,8 +510,31 @@
   }
 
   /**
-   * 10. 文字输入标注与提交闭环
+   * 10. 文字输入与多行文本渲染闭环
    */
+  function drawTextItem(ctx, item) {
+    ctx.textBaseline = 'top';
+    ctx.font = `${item.italic ? 'italic ' : ''}${item.bold ? 'bold ' : ''}${item.fontSize || 16}px sans-serif`;
+    const lines = (item.text || '').split('\n');
+    const lineHeight = (item.fontSize || 16) * 1.25;
+
+    let maxW = 0;
+    for (const l of lines) {
+      const w = ctx.measureText(l).width;
+      if (w > maxW) maxW = w;
+    }
+
+    if (item.hasBg) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+      ctx.fillRect(item.x - 4, item.y - 2, maxW + 8, lines.length * lineHeight + 4);
+    }
+
+    ctx.fillStyle = item.color;
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], item.x, item.y + i * lineHeight);
+    }
+  }
+
   function activateTextInput(x, y) {
     commitTextInput();
 
@@ -572,8 +545,8 @@
     inlineTextInput.style.fontSize = activeFontSize + 'px';
     inlineTextInput.style.fontWeight = isFontBold ? 'bold' : 'normal';
     inlineTextInput.style.fontStyle = isFontItalic ? 'italic' : 'normal';
-    inlineTextInput.style.left = Math.min(stageWidth - 120, Math.max(4, currentTextX)) + 'px';
-    inlineTextInput.style.top = Math.min(stageHeight - 36, Math.max(4, currentTextY)) + 'px';
+    inlineTextInput.style.left = Math.min(stageWidth - 140, Math.max(4, currentTextX)) + 'px';
+    inlineTextInput.style.top = Math.min(stageHeight - 40, Math.max(4, currentTextY)) + 'px';
     inlineTextInput.value = '';
     inlineTextInput.style.display = 'block';
 
@@ -606,7 +579,7 @@
   }
 
   inlineTextInput.addEventListener('blur', () => {
-    setTimeout(commitTextInput, 60);
+    setTimeout(commitTextInput, 120);
   });
   inlineTextInput.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !ev.shiftKey) {
@@ -620,7 +593,7 @@
   });
 
   /**
-   * 11. 鼠标事件交互中心
+   * 11. 鼠标事件交互中心 (平移拖拽 + 标注绘制)
    */
   stageContainer.addEventListener('mousedown', (e) => {
     if (e.button === 2) {
@@ -662,17 +635,21 @@
       return;
     }
 
-    // E. 无激活工具：允许按住截图整体平移窗口
+    // E. 无激活工具：允许按住截图随心所欲平移窗口 (60FPS 原生平移)
     isWindowMoving = true;
     winDragStart = { x: e.screenX, y: e.screenY };
   });
 
   window.addEventListener('mousemove', (e) => {
     if (isWindowMoving) {
-      const dx = e.screenX - winDragStart.x;
-      const dy = e.screenY - winDragStart.y;
-      winDragStart = { x: e.screenX, y: e.screenY };
-      window.moveBy(dx, dy);
+      const dx = Math.round(e.screenX - winDragStart.x);
+      const dy = Math.round(e.screenY - winDragStart.y);
+      if (dx !== 0 || dy !== 0) {
+        winDragStart = { x: e.screenX, y: e.screenY };
+        if (bridgeChannel) {
+          bridgeChannel.postMessage({ type: 'move_window', dx, dy });
+        }
+      }
       return;
     }
 
@@ -699,7 +676,7 @@
     }
   });
 
-  // 鼠标滚轮调节粗细 / 颗粒度
+  // 滚轮调节粗细 / 颗粒度
   window.addEventListener('wheel', (e) => {
     e.preventDefault();
     const delta = e.deltaY < 0 ? 1 : -1;
@@ -732,7 +709,7 @@
       activeTool = null;
       toolBtns.forEach(b => b.classList.remove('active'));
       subPalette.style.display = 'none';
-      stageContainer.style.cursor = 'move';
+      stageContainer.style.cursor = 'move'; // 取消工具后立即恢复随心拖拽光标
       updateToolbarPosition();
       return;
     }
@@ -740,8 +717,13 @@
   }
 
   /**
-   * 12. 工具栏与属性栏控制
+   * 12. 工具栏与二级属性栏控制
    */
+  // 阻止二级属性栏点击导致输入框失焦
+  subPalette.addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+  });
+
   toolBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       const tool = btn.dataset.tool;
@@ -751,27 +733,35 @@
         if (tool === 'rect') {
           activeTool = 'ellipse';
           btn.dataset.tool = 'ellipse';
-          btn.title = '椭圆 (E)';
+          btn.title = '椭圆 (点击切换矩形)';
         } else if (tool === 'ellipse') {
           activeTool = 'rect';
           btn.dataset.tool = 'rect';
-          btn.title = '矩形 (R)';
+          btn.title = '矩形 (点击切换椭圆)';
         } else if (tool === 'arrow') {
           activeTool = 'line';
           btn.dataset.tool = 'line';
-          btn.title = '直线 (L)';
+          btn.title = '直线 (点击切换箭头)';
         } else if (tool === 'line') {
           activeTool = 'arrow';
           btn.dataset.tool = 'arrow';
-          btn.title = '箭头 (A)';
-        } else if (tool === 'mosaic') {
-          activeTool = 'blur';
-          btn.dataset.tool = 'blur';
-          btn.title = '高斯模糊 (G)';
-        } else if (tool === 'blur') {
-          activeTool = 'mosaic';
-          btn.dataset.tool = 'mosaic';
-          btn.title = '马赛克 (K)';
+          btn.title = '箭头 (点击切换直线)';
+        } else if (tool === 'brush') {
+          activeTool = 'marker';
+          btn.dataset.tool = 'marker';
+          btn.title = '荧光高亮笔 (点击切换画笔)';
+        } else if (tool === 'marker') {
+          activeTool = 'brush';
+          btn.dataset.tool = 'brush';
+          btn.title = '画笔 (点击切换荧光笔)';
+        } else {
+          // 再次点击取消工具，变回选区拖拽模式
+          activeTool = null;
+          btn.classList.remove('active');
+          subPalette.style.display = 'none';
+          stageContainer.style.cursor = 'move';
+          updateToolbarPosition();
+          return;
         }
       } else {
         activeTool = tool;
@@ -787,7 +777,6 @@
   });
 
   function showSubPaletteForTool(tool) {
-    subPalette.style.display = 'flex';
     subShapeOptions.style.display = 'none';
     subLineOptions.style.display = 'none';
     subMosaicOptions.style.display = 'none';
@@ -797,31 +786,33 @@
     if (tool === 'rect' || tool === 'ellipse') {
       subShapeOptions.style.display = 'flex';
       subParamBadge.textContent = activeSize + 'px';
+      subPalette.style.display = 'flex';
     } else if (tool === 'arrow' || tool === 'line') {
       subLineOptions.style.display = 'flex';
       subParamBadge.textContent = activeSize + 'px';
-    } else if (tool === 'brush') {
+      subPalette.style.display = 'flex';
+    } else if (tool === 'brush' || tool === 'marker') {
       subParamBadge.textContent = activeSize + 'px';
-    } else if (tool === 'marker') {
-      subParamBadge.textContent = Math.max(12, activeSize * 3) + 'px';
+      subPalette.style.display = 'flex';
     } else if (tool === 'mosaic' || tool === 'blur') {
       subMosaicOptions.style.display = 'flex';
-      blurModeLabel.textContent = tool === 'blur' ? '平滑模糊' : '马赛克';
       subParamBadge.textContent = mosaicRadius + 'px';
+      subPalette.style.display = 'flex';
     } else if (tool === 'number') {
       subNumberOptions.style.display = 'flex';
       subParamBadge.textContent = '#' + currentNumberCount;
+      subPalette.style.display = 'flex';
     } else if (tool === 'text') {
       subTextOptions.style.display = 'flex';
       subParamBadge.textContent = activeFontSize + 'px';
-    } else if (tool === 'eraser') {
+      subPalette.style.display = 'flex';
+    } else {
       subPalette.style.display = 'none';
     }
   }
 
   // 撤销 / 重做
   btnUndo.addEventListener('click', () => {
-    commitTextInput();
     if (annotHistory.length > 0) {
       redoHistory.push(annotHistory.pop());
       redrawAnnotations();
@@ -829,7 +820,6 @@
   });
 
   btnRedo.addEventListener('click', () => {
-    commitTextInput();
     if (redoHistory.length > 0) {
       annotHistory.push(redoHistory.pop());
       redrawAnnotations();
@@ -843,7 +833,7 @@
     fillIconInner.setAttribute('fill', isFilled ? 'currentColor' : 'none');
   });
 
-  // 形状/线条：虚线开关
+  // 虚线开关
   btnToggleDash.addEventListener('click', () => {
     isDashed = !isDashed;
     btnToggleDash.classList.toggle('active', isDashed);
@@ -905,7 +895,7 @@
     subParamBadge.textContent = activeFontSize + 'px';
   });
 
-  // 20 色调色板选择
+  // 调色板
   palDots.forEach(dot => {
     dot.addEventListener('click', () => {
       palDots.forEach(d => d.classList.remove('active'));
@@ -930,49 +920,89 @@
    */
   function exportCaptureData() {
     commitTextInput();
-    if (!physicalW || !physicalH) return null;
+    if (!stageWidth || !stageHeight) return null;
 
-    // 1. 干净底图 (Clean)
-    const cleanCanvas = document.createElement('canvas');
-    cleanCanvas.width = physicalW;
-    cleanCanvas.height = physicalH;
-    const cCtx = cleanCanvas.getContext('2d');
-    cCtx.drawImage(bgCanvas, 0, 0);
-    const cleanDataUrl = cleanCanvas.toDataURL('image/png');
+    // 1. 干净底图 (Clean)：原生物理画质
+    let cleanDataUrl = null;
+    if (fullSnapshotImg && fullSnapshotImg.src) {
+      cleanDataUrl = fullSnapshotImg.src;
+    } else {
+      cleanDataUrl = bgCanvas.toDataURL('image/png');
+    }
 
-    // 2. 带涂鸦的完整合成图 (Annotated)
+    // 2. 带涂鸦的完整合成图 (Annotated)：在物理高清离屏画布上等比矢量重绘
     const annotCanvasMerged = document.createElement('canvas');
     annotCanvasMerged.width = physicalW;
     annotCanvasMerged.height = physicalH;
     const aCtx = annotCanvasMerged.getContext('2d');
-    aCtx.drawImage(bgCanvas, 0, 0);
-    aCtx.drawImage(annotCanvas, 0, 0);
+    aCtx.drawImage(fullSnapshotImg, 0, 0, physicalW, physicalH);
+
+    const exportScaleX = physicalW / stageWidth;
+    const exportScaleY = physicalH / stageHeight;
+    aCtx.save();
+    aCtx.scale(exportScaleX, exportScaleY);
+    for (const item of annotHistory) {
+      renderSingleItem(aCtx, item);
+    }
+    aCtx.restore();
+
     const annotatedDataUrl = annotCanvasMerged.toDataURL('image/png');
 
-    // 3. 构建三图分离包
-    const bundle = {
+    // 3. 构造给 AI 改图的三图分离数据包
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = physicalW;
+    maskCanvas.height = physicalH;
+    const mCtx = maskCanvas.getContext('2d');
+    mCtx.fillStyle = '#000000';
+    mCtx.fillRect(0, 0, physicalW, physicalH);
+    mCtx.fillStyle = '#ffffff';
+
+    for (const b of recordedBoxes) {
+      mCtx.fillRect(
+        Math.round(b.x * exportScaleX),
+        Math.round(b.y * exportScaleY),
+        Math.round(b.w * exportScaleX),
+        Math.round(b.h * exportScaleY)
+      );
+    }
+    const maskDataUrl = recordedBoxes.length > 0 ? maskCanvas.toDataURL('image/png') : null;
+
+    return {
       cleanDataUrl,
       annotatedDataUrl,
-      boxes: recordedBoxes,
-      textNotes: recordedTextNotes,
-      hasMaskRegion: recordedBoxes.length > 0,
-      timestamp: Date.now()
+      bundle: {
+        cleanDataUrl,
+        annotatedDataUrl,
+        maskDataUrl,
+        hasMaskRegion: recordedBoxes.length > 0,
+        textNotes: [...recordedTextNotes],
+        boxes: recordedBoxes.map(b => ({
+          x: Math.round(b.x * exportScaleX),
+          y: Math.round(b.y * exportScaleY),
+          w: Math.round(b.w * exportScaleX),
+          h: Math.round(b.h * exportScaleY)
+        })),
+        timestamp: Date.now()
+      }
     };
-
-    return { cleanDataUrl, annotatedDataUrl, bundle };
   }
 
   function finishWithAction(actionType) {
-    const data = exportCaptureData();
-    if (!data && actionType !== 'cancel') return;
-
-    if (actionType === 'copy' && data && (data.annotatedDataUrl || data.cleanDataUrl)) {
-      const copyUrl = data.annotatedDataUrl || data.cleanDataUrl;
-      try {
-        if (window.utools && typeof window.utools.copyImage === 'function') {
-          window.utools.copyImage(copyUrl);
+    let data = null;
+    if (actionType !== 'cancel') {
+      data = exportCaptureData();
+      if (data && (actionType === 'copy' || actionType === 'ocr' || actionType === 'pin')) {
+        try {
+          const { clipboard, nativeImage } = require('electron');
+          const finalImgUrl = data.annotatedDataUrl || data.cleanDataUrl;
+          if (finalImgUrl && clipboard) {
+            const nImg = nativeImage.createFromDataURL(finalImgUrl);
+            clipboard.writeImage(nImg);
+          }
+        } catch (e) {
+          console.warn('写入剪贴板异常:', e.message);
         }
-      } catch (e) {}
+      }
     }
 
     try {

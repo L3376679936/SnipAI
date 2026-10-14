@@ -213,6 +213,24 @@ window.nativeBridge = {
             logDebug(`写入 CAPTURE_INIT_FILE 异常: ${initErr.message}`);
           }
 
+          // 创建 BroadcastChannel 接收子窗口的平移移动指令，实现随心所欲的平移拖拽
+          let bridgeChannel = null;
+          try {
+            bridgeChannel = new BroadcastChannel('snipai_capture_channel');
+            bridgeChannel.onmessage = (ev) => {
+              if (ev.data && ev.data.type === 'move_window') {
+                if (captureWin && !captureWin.isDestroyed()) {
+                  try {
+                    const [cx, cy] = captureWin.getPosition();
+                    captureWin.setPosition(cx + ev.data.dx, cy + ev.data.dy);
+                  } catch (e) {}
+                }
+              }
+            };
+          } catch (chanErr) {
+            logDebug(`创建 BroadcastChannel 失败: ${chanErr.message}`);
+          }
+
           // 5. 弹出置顶透明截图标注窗口 capture.html (指定当前屏幕坐标 + 100% 透明背景色)
           let captureWin = null;
           try {
@@ -240,6 +258,7 @@ window.nativeBridge = {
               }
             });
           } catch (winErr) {
+            if (bridgeChannel) { try { bridgeChannel.close(); } catch (e) {} bridgeChannel = null; }
             logDebug(`创建 capture.html 失败: ${winErr.message}，降级回退`);
             window.nativeBridge.showMainWindow();
             resolve({
@@ -261,6 +280,11 @@ window.nativeBridge = {
           const onFinish = () => {
             if (isHandled) return;
             isHandled = true;
+
+            if (bridgeChannel) {
+              try { bridgeChannel.close(); } catch (e) {}
+              bridgeChannel = null;
+            }
 
             // 读取 IPC 结果
             let result = null;

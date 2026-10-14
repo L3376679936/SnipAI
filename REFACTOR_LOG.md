@@ -148,6 +148,13 @@
 3. **彻底清理二进制与多余源码**：
    - `git rm -r screenshotOcrTranslate/bin/snipper.exe screenshotOcrTranslate/src/snipper`，零二进制，包体极致轻量化。
 
+4. **原生随心平移拖拽与坐标体系解耦全面升级（解决截完图无法拖拽与标注错位）**：
+   - **BroadcastChannel 原生 60FPS 窗口平移**：使用现代原生 `BroadcastChannel` 建立子窗口与宿主 `preload.js` 的内存级双向桥接通道。在未激活工具时鼠标呈现 `move` 抓手光标，用户按住截图任意区域拖拽时，直接驱动 Electron 顶级 BrowserWindow `setPosition`，实现如桌面贴图般随意平移移动；
+   - **画布尺寸与逻辑坐标 1:1 统一解耦**：彻底移除交互画布与 DOM 之间的全局缩放矩阵混淆，`bgCanvas` 与 `annotCanvas` 统一以 `stageWidth × stageHeight` 逻辑像素呈现；
+   - **马赛克与高斯模糊 0 误差**：从逻辑底图画布直接平稳采样并块状渲染/高斯模糊，彻底消除越界报错与放大变形 Bug；
+   - **文字工具多行排版与属性栏联动防失焦**：支持回车换行与自适应暗色对比度背景衬垫；阻止二级属性栏（字号、加粗、颜色）点击冒泡，避免打字输入框误失焦消失；
+   - **物理分辨率高清矢量无损导出**：在导出、复制、OCR 与改图时，通过独立的离屏临时画布以 `physicalW × physicalH` 原生分辨率等比高清矢量重绘，兼顾流畅交互与极致清晰画质。
+
 ---
 
 
