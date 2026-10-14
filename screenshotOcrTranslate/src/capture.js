@@ -1,92 +1,77 @@
 /**
- * 纯 JS 原生级全功能截屏引擎与全能悬浮工具栏 (100% 对齐 Snipaste 功能生态)
- * 零二进制依赖，100% 遵守 uTools 应用市场审核红线
- * 包含：8大标注工具、荧光笔、序号标注、橡皮擦、撤销重做、滚轮调节笔宽、20色调色板、三图分离
+ * capture.js - 纯 JS 原生截图标注与悬浮工具栏引擎 (无白屏/无跳屏/全功能版)
+ * 1:1 对齐 Snipaste / 原版 C# Snipper 18 项工具与二级属性栏
  */
 
 (function () {
-  // 核心 DOM 节点
+  'use strict';
+
+  // 1. DOM 元素获取
   const stageContainer = document.getElementById('stageContainer');
   const bgCanvas = document.getElementById('bgCanvas');
   const annotCanvas = document.getElementById('annotCanvas');
+  const sizeBadge = document.getElementById('sizeBadge');
+  const inlineTextInput = document.getElementById('inlineTextInput');
+
   const bgCtx = bgCanvas.getContext('2d');
   const annotCtx = annotCanvas.getContext('2d');
 
-  const selectionBox = document.getElementById('selectionBox');
-  const sizeBadge = document.getElementById('sizeBadge');
-  const magnifier = document.getElementById('magnifier');
-  const magCanvas = document.getElementById('magCanvas');
-  const magCtx = magCanvas.getContext('2d');
-  const magColorSample = document.getElementById('magColorSample');
-  const magHexText = document.getElementById('magHexText');
-  const magRgbText = document.getElementById('magRgbText');
-
+  // 工具栏元素
   const toolbarWrap = document.getElementById('toolbarWrap');
   const floatingToolbar = document.getElementById('floatingToolbar');
   const subPalette = document.getElementById('subPalette');
   const subParamBadge = document.getElementById('subParamBadge');
-  const inlineTextInput = document.getElementById('inlineTextInput');
+  const paletteSep = document.getElementById('paletteSep');
 
-  // 二级选项分区
+  // 二级子配置区
   const subShapeOptions = document.getElementById('subShapeOptions');
+  const subLineOptions = document.getElementById('subLineOptions');
+  const subMosaicOptions = document.getElementById('subMosaicOptions');
+  const subNumberOptions = document.getElementById('subNumberOptions');
+  const subTextOptions = document.getElementById('subTextOptions');
+
+  // 二级子控制控件
   const btnToggleFill = document.getElementById('btnToggleFill');
   const fillIconInner = document.getElementById('fillIconInner');
   const btnToggleDash = document.getElementById('btnToggleDash');
-
-  const subLineOptions = document.getElementById('subLineOptions');
   const btnArrowStyle = document.getElementById('btnArrowStyle');
   const arrowStyleLabel = document.getElementById('arrowStyleLabel');
-
-  const subMosaicOptions = document.getElementById('subMosaicOptions');
   const btnToggleBlurMode = document.getElementById('btnToggleBlurMode');
   const blurModeLabel = document.getElementById('blurModeLabel');
   const rngMosaicSize = document.getElementById('rngMosaicSize');
   const valMosaicSize = document.getElementById('valMosaicSize');
-
-  const subNumberOptions = document.getElementById('subNumberOptions');
   const btnResetNumber = document.getElementById('btnResetNumber');
-
-  const subTextOptions = document.getElementById('subTextOptions');
   const btnTextBold = document.getElementById('btnTextBold');
   const btnTextItalic = document.getElementById('btnTextItalic');
   const btnTextBg = document.getElementById('btnTextBg');
   const selFontSize = document.getElementById('selFontSize');
 
+  // 调色板
   const currentSwatch = document.getElementById('currentSwatch');
   const nativeColorPicker = document.getElementById('nativeColorPicker');
   const palDots = document.querySelectorAll('.pal-dot');
 
-  // 工具栏按钮
+  // 主工具按钮
   const toolBtns = document.querySelectorAll('.tool-btn[data-tool]');
   const btnUndo = document.getElementById('btnUndo');
   const btnRedo = document.getElementById('btnRedo');
+
+  // 核心动作按钮
   const actAiEdit = document.getElementById('actAiEdit');
   const actOcr = document.getElementById('actOcr');
+  const actCancel = document.getElementById('actCancel');
   const actPin = document.getElementById('actPin');
   const actSave = document.getElementById('actSave');
-  const actCancel = document.getElementById('actCancel');
   const actConfirm = document.getElementById('actConfirm');
 
-  // 状态机与配置
-  let fullSnapshotImg = new Image();
-  let imgLoaded = false;
-  let screenWidth = window.innerWidth;
-  let screenHeight = window.innerHeight;
-  let dpr = window.devicePixelRatio || 1;
-  let isRegionMode = false;
+  // 2. 画布与交互核心状态
+  let stageWidth = 0;
+  let stageHeight = 0;
+  let fullSnapshotImg = null;
+  let sourceOffscreenCanvas = null; // 1:1 纯净底图采样画布 (用于马赛克与干净导出)
+  let sourceOffscreenCtx = null;
 
-  // 选区几何
-  let selRect = { x: 0, y: 0, w: 0, h: 0 };
-  let isSelecting = false;
-  let isSelected = false;
-  let isResizing = false;
-  let isMoving = false;
-  let activeHandle = null;
-  let dragStart = { x: 0, y: 0 };
-  let origRect = { x: 0, y: 0, w: 0, h: 0 };
-
-  // 当前标注全局属性
-  let activeTool = null; // 'rect' | 'ellipse' | 'arrow' | 'line' | 'brush' | 'marker' | 'mosaic' | 'blur' | 'text' | 'number' | 'eraser' | null
+  let activeTool = null; // 'rect' | 'ellipse' | 'line' | 'arrow' | 'brush' | 'marker' | 'mosaic' | 'blur' | 'text' | 'number' | 'eraser'
   let activeColor = '#ef4444';
   let activeSize = 4;
   let isFilled = false;
@@ -95,451 +80,74 @@
   let blurMode = 'mosaic'; // 'mosaic' | 'blur'
   let mosaicRadius = 10;
   let currentNumberCount = 1;
-
+  let activeFontSize = 16;
   let isFontBold = true;
   let isFontItalic = false;
   let hasTextBg = false;
-  let activeFontSize = 16;
 
+  // 绘图与拖拽状态
   let isDrawing = false;
   let drawStart = { x: 0, y: 0 };
   let brushPoints = [];
+  let currentTextX = 0;
+  let currentTextY = 0;
 
-  // 标注历史栈与重做栈
+  // 窗口拖动状态 (无激活工具时拖动窗口)
+  let isWindowMoving = false;
+  let winDragStart = { x: 0, y: 0 };
+
+  // 标注历史堆栈
   let annotHistory = [];
   let redoHistory = [];
-  let recordedBoxes = []; // 供 AI 改图继承的红框坐标
-  let recordedTextNotes = []; // 供 AI 改图继承的文字指令
+  let recordedBoxes = [];
+  let recordedTextNotes = [];
 
   /**
-   * 1. 初始化屏幕与画布
+   * 3. 核心初始化：载入截图并排版
    */
-  function initScreen() {
-    screenWidth = window.innerWidth;
-    screenHeight = window.innerHeight;
-    dpr = window.devicePixelRatio || 1;
-
-    bgCanvas.width = screenWidth * dpr;
-    bgCanvas.height = screenHeight * dpr;
-    bgCanvas.style.width = screenWidth + 'px';
-    bgCanvas.style.height = screenHeight + 'px';
-    bgCtx.scale(dpr, dpr);
-
-    annotCanvas.width = screenWidth * dpr;
-    annotCanvas.height = screenHeight * dpr;
-    annotCanvas.style.width = screenWidth + 'px';
-    annotCanvas.style.height = screenHeight + 'px';
-    annotCtx.scale(dpr, dpr);
-  }
-
-  window.addEventListener('resize', initScreen);
-  initScreen();
-
-  /**
-   * 载入全屏快照底图并初次绘制
-   */
-  window.loadScreenSnapshot = function (dataUrl, options = {}) {
-    if (!dataUrl) return;
+  window.loadCroppedImage = function (dataUrl, imgW, imgH) {
+    fullSnapshotImg = new Image();
     fullSnapshotImg.onload = () => {
-      imgLoaded = true;
-      const nw = fullSnapshotImg.naturalWidth;
-      const nh = fullSnapshotImg.naturalHeight;
+      stageWidth = imgW || fullSnapshotImg.naturalWidth;
+      stageHeight = imgH || fullSnapshotImg.naturalHeight;
 
-      if (options.isRegion || (nw < screenWidth * 0.95 || nh < screenHeight * 0.95)) {
-        isRegionMode = true;
-        // 选区模式：居中呈现选区
-        const rw = Math.min(nw, screenWidth - 40);
-        const rh = Math.min(nh, screenHeight - 80);
-        const rx = Math.max(10, Math.floor((screenWidth - rw) / 2));
-        const ry = Math.max(10, Math.floor((screenHeight - rh) / 2));
+      stageContainer.style.width = stageWidth + 'px';
+      stageContainer.style.height = stageHeight + 'px';
 
-        selRect = { x: rx, y: ry, w: rw, h: rh };
-        isSelected = true;
-        magnifier.style.display = 'none';
+      bgCanvas.width = stageWidth;
+      bgCanvas.height = stageHeight;
+      bgCanvas.style.width = stageWidth + 'px';
+      bgCanvas.style.height = stageHeight + 'px';
 
-        renderBackground();
-        updateSelectionUI();
-      } else {
-        isRegionMode = false;
-        renderBackground();
-        magnifier.style.display = 'flex';
-      }
+      annotCanvas.width = stageWidth;
+      annotCanvas.height = stageHeight;
+      annotCanvas.style.width = stageWidth + 'px';
+      annotCanvas.style.height = stageHeight + 'px';
+
+      // 1:1 离屏像素级采样缓冲
+      sourceOffscreenCanvas = document.createElement('canvas');
+      sourceOffscreenCanvas.width = stageWidth;
+      sourceOffscreenCanvas.height = stageHeight;
+      sourceOffscreenCtx = sourceOffscreenCanvas.getContext('2d');
+      sourceOffscreenCtx.drawImage(fullSnapshotImg, 0, 0, stageWidth, stageHeight);
+
+      // 绘制主背景图
+      bgCtx.drawImage(fullSnapshotImg, 0, 0, stageWidth, stageHeight);
+
+      // 显示尺寸胶囊
+      sizeBadge.textContent = `${stageWidth} × ${stageHeight} px`;
+
+      // 调整工具栏位置：紧贴截图底部靠右
+      toolbarWrap.style.top = (stageHeight + 8) + 'px';
+      toolbarWrap.style.right = '0px';
+
+      clearAnnotations();
     };
     fullSnapshotImg.src = dataUrl;
   };
 
-  try {
-    const cachedSnap = sessionStorage.getItem('rubick_screen_snapshot');
-    if (cachedSnap) {
-      window.loadScreenSnapshot(cachedSnap);
-      sessionStorage.removeItem('rubick_screen_snapshot');
-    }
-  } catch (e) {}
-
   /**
-   * 2. 绘制背景与掏空选区
-   */
-  function renderBackground() {
-    if (!imgLoaded) return;
-    bgCtx.clearRect(0, 0, screenWidth, screenHeight);
-
-    if (isRegionMode) {
-      // 选区模式：暗色半透明底，居中绘制选区图片
-      bgCtx.fillStyle = 'rgba(0, 0, 0, 0.42)';
-      bgCtx.fillRect(0, 0, screenWidth, screenHeight);
-
-      if (selRect.w > 0 && selRect.h > 0) {
-        bgCtx.drawImage(fullSnapshotImg, selRect.x, selRect.y, selRect.w, selRect.h);
-      }
-    } else {
-      // 全屏模式：铺满底图，盖暗色层，掏空高亮
-      bgCtx.drawImage(fullSnapshotImg, 0, 0, screenWidth, screenHeight);
-      bgCtx.fillStyle = 'rgba(0, 0, 0, 0.42)';
-      bgCtx.fillRect(0, 0, screenWidth, screenHeight);
-
-      if (selRect.w > 0 && selRect.h > 0) {
-        bgCtx.save();
-        bgCtx.beginPath();
-        bgCtx.rect(selRect.x, selRect.y, selRect.w, selRect.h);
-        bgCtx.clip();
-        bgCtx.drawImage(fullSnapshotImg, 0, 0, screenWidth, screenHeight);
-        bgCtx.restore();
-      }
-    }
-  }
-
-  /**
-   * 3. 像素放大镜与取色器
-   */
-  function updateMagnifier(x, y) {
-    if (isSelected || !imgLoaded) {
-      magnifier.style.display = 'none';
-      return;
-    }
-
-    magnifier.style.display = 'flex';
-    let magX = x + 18;
-    let magY = y + 18;
-    if (magX + 140 > screenWidth) magX = x - 148;
-    if (magY + 160 > screenHeight) magY = y - 168;
-
-    magnifier.style.left = magX + 'px';
-    magnifier.style.top = magY + 'px';
-
-    const sampleSize = 15;
-    const magW = magCanvas.width;
-    const magH = magCanvas.height;
-
-    magCtx.imageSmoothingEnabled = false;
-    magCtx.clearRect(0, 0, magW, magH);
-
-    magCtx.drawImage(
-      fullSnapshotImg,
-      (x - Math.floor(sampleSize / 2)) * (fullSnapshotImg.naturalWidth / screenWidth),
-      (y - Math.floor(sampleSize / 2)) * (fullSnapshotImg.naturalHeight / screenHeight),
-      sampleSize * (fullSnapshotImg.naturalWidth / screenWidth),
-      sampleSize * (fullSnapshotImg.naturalHeight / screenHeight),
-      0, 0, magW, magH
-    );
-
-    // 中心红色准星十字
-    magCtx.strokeStyle = 'rgba(239, 68, 68, 0.9)';
-    magCtx.lineWidth = 1.5;
-    magCtx.beginPath();
-    magCtx.moveTo(magW / 2, 0); magCtx.lineTo(magW / 2, magH);
-    magCtx.moveTo(0, magH / 2); magCtx.lineTo(magW, magH / 2);
-    magCtx.stroke();
-
-    try {
-      const p = magCtx.getImageData(Math.floor(magW / 2), Math.floor(magH / 2), 1, 1).data;
-      const hex = rgbToHex(p[0], p[1], p[2]);
-      magColorSample.style.backgroundColor = hex;
-      magHexText.textContent = hex;
-      magRgbText.textContent = `RGB(${p[0]}, ${p[1]}, ${p[2]})`;
-      magnifier.dataset.currentColor = hex;
-    } catch (e) {}
-  }
-
-  function rgbToHex(r, g, b) {
-    return '#' + [r, g, b].map(x => {
-      const h = x.toString(16);
-      return h.length === 1 ? '0' + h : h;
-    }).join('').toUpperCase();
-  }
-
-  /**
-   * 4. 选区与悬浮工具栏智能定位
-   */
-  function updateSelectionUI() {
-    if (selRect.w <= 0 || selRect.h <= 0) {
-      selectionBox.style.display = 'none';
-      toolbarWrap.style.display = 'none';
-      return;
-    }
-
-    selectionBox.style.display = 'block';
-    selectionBox.style.left = selRect.x + 'px';
-    selectionBox.style.top = selRect.y + 'px';
-    selectionBox.style.width = selRect.w + 'px';
-    selectionBox.style.height = selRect.h + 'px';
-
-    sizeBadge.textContent = `${Math.round(selRect.w)} × ${Math.round(selRect.h)} px`;
-
-    updateToolbarPosition();
-  }
-
-  function updateToolbarPosition() {
-    if (!isSelected) {
-      toolbarWrap.style.display = 'none';
-      return;
-    }
-
-    toolbarWrap.style.display = 'flex';
-    const tbWidth = 510;
-    const tbHeight = subPalette.style.display === 'flex' ? 76 : 38;
-
-    let left = selRect.x + selRect.w - tbWidth;
-    if (left + tbWidth > screenWidth - 8) left = screenWidth - tbWidth - 8;
-    if (left < 8) left = 8;
-
-    let top = selRect.y + selRect.h + 8;
-    if (top + tbHeight > screenHeight - 8) {
-      if (selRect.y - tbHeight - 8 >= 8) {
-        top = selRect.y - tbHeight - 8;
-      } else {
-        top = selRect.y + selRect.h - tbHeight - 8;
-      }
-    }
-
-    toolbarWrap.style.left = left + 'px';
-    toolbarWrap.style.top = top + 'px';
-  }
-
-  /**
-   * 5. 鼠标与状态机交互
-   */
-  window.addEventListener('mousedown', (e) => {
-    if (toolbarWrap.contains(e.target) || inlineTextInput.contains(e.target)) return;
-
-    // 右键处理
-    if (e.button === 2) {
-      handleRightClick();
-      return;
-    }
-
-    const x = e.clientX;
-    const y = e.clientY;
-
-    // A. 橡皮擦模式：点击删除标注
-    if (isSelected && activeTool === 'eraser') {
-      eraseAtPoint(x, y);
-      return;
-    }
-
-    // B. 序号模式：点击打标
-    if (isSelected && activeTool === 'number') {
-      if (isInSelection(x, y)) {
-        addNumberBadge(x, y);
-      }
-      return;
-    }
-
-    // C. 文字输入模式
-    if (isSelected && activeTool === 'text') {
-      if (isInSelection(x, y)) {
-        showInlineTextInput(x, y);
-      }
-      return;
-    }
-
-    // D. 绘图模式 (矩形/椭圆/线条/画笔/记号笔/马赛克/模糊)
-    if (isSelected && activeTool) {
-      if (isInSelection(x, y)) {
-        isDrawing = true;
-        drawStart = { x, y };
-        if (activeTool === 'brush' || activeTool === 'marker') {
-          brushPoints = [{ x, y }];
-        }
-      }
-      return;
-    }
-
-    // E. 点击 8 个拉伸调整点
-    if (isSelected && e.target.classList.contains('handle')) {
-      isResizing = true;
-      activeHandle = e.target.dataset.handle;
-      dragStart = { x, y };
-      origRect = { ...selRect };
-      return;
-    }
-
-    // F. 拖拽选区内部移动
-    if (isSelected && isInSelection(x, y)) {
-      isMoving = true;
-      dragStart = { x, y };
-      origRect = { ...selRect };
-      return;
-    }
-
-    // G. 重新划定选区
-    isSelecting = true;
-    isSelected = false;
-    dragStart = { x, y };
-    selRect = { x, y, w: 0, h: 0 };
-    clearAnnotations();
-    renderBackground();
-    updateSelectionUI();
-  });
-
-  window.addEventListener('mousemove', (e) => {
-    const x = e.clientX;
-    const y = e.clientY;
-
-    if (!isSelected && !isSelecting) {
-      updateMagnifier(x, y);
-    }
-
-    if (isSelecting) {
-      const curX = Math.max(0, Math.min(screenWidth, x));
-      const curY = Math.max(0, Math.min(screenHeight, y));
-      selRect = {
-        x: Math.min(dragStart.x, curX),
-        y: Math.min(dragStart.y, curY),
-        w: Math.abs(curX - dragStart.x),
-        h: Math.abs(curY - dragStart.y)
-      };
-      renderBackground();
-      updateSelectionUI();
-      return;
-    }
-
-    if (isResizing && activeHandle) {
-      resizeSelection(x, y);
-      renderBackground();
-      updateSelectionUI();
-      return;
-    }
-
-    if (isMoving) {
-      const dx = x - dragStart.x;
-      const dy = y - dragStart.y;
-      selRect.x = Math.max(0, Math.min(screenWidth - origRect.w, origRect.x + dx));
-      selRect.y = Math.max(0, Math.min(screenHeight - origRect.h, origRect.y + dy));
-      renderBackground();
-      updateSelectionUI();
-      redrawAnnotations();
-      return;
-    }
-
-    if (isDrawing && activeTool) {
-      renderActiveDrawing(x, y);
-    }
-  });
-
-  window.addEventListener('mouseup', (e) => {
-    if (isSelecting) {
-      isSelecting = false;
-      if (selRect.w > 8 && selRect.h > 8) {
-        isSelected = true;
-        magnifier.style.display = 'none';
-        updateSelectionUI();
-      } else {
-        selRect = { x: 0, y: 0, w: 0, h: 0 };
-        isSelected = false;
-        renderBackground();
-        updateSelectionUI();
-      }
-      return;
-    }
-
-    if (isResizing || isMoving) {
-      isResizing = false;
-      isMoving = false;
-      activeHandle = null;
-      updateToolbarPosition();
-      return;
-    }
-
-    if (isDrawing) {
-      isDrawing = false;
-      commitActiveDrawing(e.clientX, e.clientY);
-    }
-  });
-
-  // 滚轮快捷调节笔宽 / 颗粒度
-  window.addEventListener('wheel', (e) => {
-    if (!isSelected) return;
-    e.preventDefault();
-    const delta = e.deltaY < 0 ? 1 : -1;
-
-    if (activeTool === 'mosaic' || activeTool === 'blur') {
-      mosaicRadius = Math.max(4, Math.min(32, mosaicRadius + delta * 2));
-      rngMosaicSize.value = mosaicRadius;
-      valMosaicSize.textContent = mosaicRadius;
-      subParamBadge.textContent = mosaicRadius + 'px';
-    } else {
-      activeSize = Math.max(1, Math.min(64, activeSize + delta));
-      subParamBadge.textContent = activeSize + 'px';
-    }
-  }, { passive: false });
-
-  function handleRightClick() {
-    if (isDrawing) {
-      // 取消当前临时绘制
-      isDrawing = false;
-      brushPoints = [];
-      redrawAnnotations();
-      return;
-    }
-    if (activeTool) {
-      // 退出当前标注工具
-      activeTool = null;
-      toolBtns.forEach(b => b.classList.remove('active'));
-      subPalette.style.display = 'none';
-      updateToolbarPosition();
-      return;
-    }
-    if (isSelected) {
-      // 放弃选区重新划选
-      isSelected = false;
-      selRect = { x: 0, y: 0, w: 0, h: 0 };
-      clearAnnotations();
-      renderBackground();
-      updateSelectionUI();
-      return;
-    }
-    // 未选区退出截屏
-    finishWithAction('cancel');
-  }
-
-  function isInSelection(x, y) {
-    return x >= selRect.x && x <= selRect.x + selRect.w &&
-           y >= selRect.y && y <= selRect.y + selRect.h;
-  }
-
-  function resizeSelection(curX, curY) {
-    let { x, y, w, h } = origRect;
-    const dx = curX - dragStart.x;
-    const dy = curY - dragStart.y;
-
-    if (activeHandle.includes('e')) w = Math.max(10, origRect.w + dx);
-    if (activeHandle.includes('s')) h = Math.max(10, origRect.h + dy);
-    if (activeHandle.includes('w')) {
-      const newW = Math.max(10, origRect.w - dx);
-      x = origRect.x + (origRect.w - newW);
-      w = newW;
-    }
-    if (activeHandle.includes('n')) {
-      const newH = Math.max(10, origRect.h - dy);
-      y = origRect.y + (origRect.h - newH);
-      h = newH;
-    }
-
-    selRect = { x, y, w, h };
-  }
-
-  /**
-   * 6. 绘图与标注管线
+   * 4. 绘图管线与图元渲染
    */
   function applyStrokeStyles(ctx, item) {
     ctx.strokeStyle = item.color;
@@ -559,7 +167,7 @@
 
     annotCtx.save();
     annotCtx.beginPath();
-    annotCtx.rect(selRect.x, selRect.y, selRect.w, selRect.h);
+    annotCtx.rect(0, 0, stageWidth, stageHeight);
     annotCtx.clip();
 
     const tempItem = {
@@ -618,17 +226,12 @@
 
     if (activeTool === 'rect' && w > 4 && h > 4) {
       newEntry = { type: 'rect', color: activeColor, size: activeSize, isFilled, isDashed, x: minX, y: minY, w, h };
-      recordedBoxes.push({
-        x: Math.round(minX - selRect.x),
-        y: Math.round(minY - selRect.y),
-        w: Math.round(w),
-        h: Math.round(h)
-      });
+      recordedBoxes.push({ x: Math.round(minX), y: Math.round(minY), w: Math.round(w), h: Math.round(h) });
     } else if (activeTool === 'ellipse' && w > 4 && h > 4) {
       newEntry = { type: 'ellipse', color: activeColor, size: activeSize, isFilled, isDashed, x: minX, y: minY, w, h };
-    } else if (activeTool === 'arrow' && (Math.abs(curX - drawStart.x) > 4 || Math.abs(curY - drawStart.y) > 4)) {
+    } else if (activeTool === 'arrow' && (w > 4 || h > 4)) {
       newEntry = { type: 'arrow', color: activeColor, size: activeSize, isDashed, arrowStyle, x1: drawStart.x, y1: drawStart.y, x2: curX, y2: curY };
-    } else if (activeTool === 'line' && (Math.abs(curX - drawStart.x) > 4 || Math.abs(curY - drawStart.y) > 4)) {
+    } else if (activeTool === 'line' && (w > 4 || h > 4)) {
       newEntry = { type: 'line', color: activeColor, size: activeSize, isDashed, x1: drawStart.x, y1: drawStart.y, x2: curX, y2: curY };
     } else if (activeTool === 'brush' && brushPoints.length > 1) {
       newEntry = { type: 'brush', color: activeColor, size: activeSize, points: [...brushPoints] };
@@ -642,7 +245,7 @@
 
     if (newEntry) {
       annotHistory.push(newEntry);
-      redoHistory = []; // 清空重做栈
+      redoHistory = [];
     }
 
     brushPoints = [];
@@ -650,11 +253,11 @@
   }
 
   function redrawAnnotations() {
-    annotCtx.clearRect(0, 0, screenWidth, screenHeight);
+    annotCtx.clearRect(0, 0, stageWidth, stageHeight);
 
     annotCtx.save();
     annotCtx.beginPath();
-    annotCtx.rect(selRect.x, selRect.y, selRect.w, selRect.h);
+    annotCtx.rect(0, 0, stageWidth, stageHeight);
     annotCtx.clip();
 
     for (const item of annotHistory) {
@@ -688,11 +291,12 @@
       } else if (item.type === 'number') {
         drawNumberBadge(annotCtx, item.x, item.y, item.num, item.color);
       } else if (item.type === 'text') {
+        annotCtx.textBaseline = 'top';
         annotCtx.font = `${item.italic ? 'italic ' : ''}${item.bold ? 'bold ' : ''}${item.fontSize || 16}px sans-serif`;
         if (item.hasBg) {
           const txtW = annotCtx.measureText(item.text).width;
-          annotCtx.fillStyle = 'rgba(0, 0, 0, 0.65)';
-          annotCtx.fillRect(item.x - 2, item.y - item.fontSize, txtW + 6, item.fontSize + 4);
+          annotCtx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+          annotCtx.fillRect(item.x - 3, item.y - 2, txtW + 6, (item.fontSize || 16) + 4);
         }
         annotCtx.fillStyle = item.color;
         annotCtx.fillText(item.text, item.x, item.y);
@@ -709,7 +313,7 @@
     redoHistory = [];
     recordedBoxes = [];
     recordedTextNotes = [];
-    annotCtx.clearRect(0, 0, screenWidth, screenHeight);
+    annotCtx.clearRect(0, 0, stageWidth, stageHeight);
   }
 
   function drawArrow(ctx, x1, y1, x2, y2, size, style = 'single') {
@@ -723,7 +327,6 @@
 
     ctx.save();
     ctx.fillStyle = ctx.strokeStyle;
-    // 终点箭头
     ctx.beginPath();
     ctx.moveTo(x2, y2);
     ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 7), y2 - headLen * Math.sin(angle - Math.PI / 7));
@@ -732,7 +335,6 @@
     ctx.closePath();
     ctx.fill();
 
-    // 双向箭头起点箭头
     if (style === 'double') {
       const oppAngle = angle + Math.PI;
       ctx.beginPath();
@@ -757,43 +359,68 @@
     ctx.stroke();
   }
 
+  /**
+   * 5. 马赛克 (Pixelate) 算法：精准采样，彻底防越界
+   */
   function drawMosaic(ctx, mx, my, mw, mh, radius = 8) {
-    const blockSize = Math.max(4, radius);
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = mw;
-    tempCanvas.height = mh;
-    const tCtx = tempCanvas.getContext('2d');
-    tCtx.drawImage(fullSnapshotImg,
-      (isRegionMode ? mx - selRect.x : mx * (fullSnapshotImg.naturalWidth / screenWidth)),
-      (isRegionMode ? my - selRect.y : my * (fullSnapshotImg.naturalHeight / screenHeight)),
-      mw, mh,
-      0, 0, mw, mh
-    );
+    mx = Math.round(mx);
+    my = Math.round(my);
+    mw = Math.round(mw);
+    mh = Math.round(mh);
+    if (mw < 2 || mh < 2 || !sourceOffscreenCtx) return;
 
-    const imgData = tCtx.getImageData(0, 0, mw, mh);
-    const data = imgData.data;
+    const blockSize = Math.max(4, Math.round(radius));
+    const safeW = Math.min(mw, stageWidth - mx);
+    const safeH = Math.min(mh, stageHeight - my);
+    if (safeW <= 0 || safeH <= 0) return;
 
-    for (let y = 0; y < mh; y += blockSize) {
-      for (let x = 0; x < mw; x += blockSize) {
-        const pIndex = (y * mw + x) * 4;
-        ctx.fillStyle = `rgb(${data[pIndex]},${data[pIndex + 1]},${data[pIndex + 2]})`;
-        ctx.fillRect(mx + x, my + y, blockSize, blockSize);
+    try {
+      const imgData = sourceOffscreenCtx.getImageData(mx, my, safeW, safeH);
+      const data = imgData.data;
+
+      for (let y = 0; y < safeH; y += blockSize) {
+        for (let x = 0; x < safeW; x += blockSize) {
+          const px = Math.min(x, safeW - 1);
+          const py = Math.min(y, safeH - 1);
+          const pIndex = (py * safeW + px) * 4;
+          const r = data[pIndex];
+          const g = data[pIndex + 1];
+          const b = data[pIndex + 2];
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+          ctx.fillRect(mx + x, my + y, Math.min(blockSize, safeW - x), Math.min(blockSize, safeH - y));
+        }
       }
+    } catch (err) {
+      console.error('drawMosaic 执行异常:', err);
     }
   }
 
+  /**
+   * 6. 高斯模糊 (Smooth Blur) 算法
+   */
   function drawBlur(ctx, mx, my, mw, mh, radius = 8) {
-    ctx.save();
-    ctx.filter = `blur(${Math.max(2, Math.round(radius / 2))}px)`;
-    ctx.drawImage(fullSnapshotImg,
-      (isRegionMode ? mx - selRect.x : mx * (fullSnapshotImg.naturalWidth / screenWidth)),
-      (isRegionMode ? my - selRect.y : my * (fullSnapshotImg.naturalHeight / screenHeight)),
-      mw, mh,
-      mx, my, mw, mh
-    );
-    ctx.restore();
+    mx = Math.round(mx);
+    my = Math.round(my);
+    mw = Math.round(mw);
+    mh = Math.round(mh);
+    if (mw < 2 || mh < 2) return;
+
+    try {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(mx, my, mw, mh);
+      ctx.clip();
+      ctx.filter = `blur(${Math.max(2, Math.round(radius / 2))}px)`;
+      ctx.drawImage(bgCanvas, 0, 0, stageWidth, stageHeight);
+      ctx.restore();
+    } catch (err) {
+      console.error('drawBlur 执行异常:', err);
+    }
   }
 
+  /**
+   * 7. 序号标记
+   */
   function addNumberBadge(x, y) {
     annotHistory.push({
       type: 'number',
@@ -822,8 +449,10 @@
     ctx.fillText(num, x, y + 0.5);
   }
 
+  /**
+   * 8. 橡皮擦 (点选命中消除)
+   */
   function eraseAtPoint(x, y) {
-    // 倒序寻找命中的标注
     for (let i = annotHistory.length - 1; i >= 0; i--) {
       const it = annotHistory[i];
       let hit = false;
@@ -832,7 +461,7 @@
       } else if (it.type === 'number') {
         hit = Math.hypot(x - it.x, y - it.y) <= 15;
       } else if (it.type === 'text') {
-        hit = x >= it.x - 4 && x <= it.x + 100 && y >= it.y - 20 && y <= it.y + 4;
+        hit = x >= it.x - 4 && x <= it.x + 120 && y >= it.y - 4 && y <= it.y + (it.fontSize || 16) + 4;
       } else if (it.type === 'brush' || it.type === 'marker') {
         hit = it.points.some(p => Math.hypot(x - p.x, y - p.y) <= Math.max(8, it.size));
       } else if (it.type === 'arrow' || it.type === 'line') {
@@ -847,56 +476,197 @@
     }
   }
 
-  function showInlineTextInput(x, y) {
-    inlineTextInput.style.display = 'block';
-    inlineTextInput.style.left = x + 'px';
-    inlineTextInput.style.top = y + 'px';
+  /**
+   * 9. 文字输入标注与提交闭环
+   */
+  function activateTextInput(x, y) {
+    commitTextInput();
+
+    currentTextX = Math.round(x);
+    currentTextY = Math.round(y);
+
     inlineTextInput.style.color = activeColor;
     inlineTextInput.style.fontSize = activeFontSize + 'px';
     inlineTextInput.style.fontWeight = isFontBold ? 'bold' : 'normal';
     inlineTextInput.style.fontStyle = isFontItalic ? 'italic' : 'normal';
+    inlineTextInput.style.left = Math.min(stageWidth - 120, Math.max(4, currentTextX)) + 'px';
+    inlineTextInput.style.top = Math.min(stageHeight - 36, Math.max(4, currentTextY)) + 'px';
     inlineTextInput.value = '';
-    inlineTextInput.focus();
+    inlineTextInput.style.display = 'block';
 
-    const commitText = () => {
-      const val = inlineTextInput.value.trim();
-      if (val) {
-        annotHistory.push({
-          type: 'text',
-          text: val,
-          x: x,
-          y: y + activeFontSize,
-          color: activeColor,
-          fontSize: activeFontSize,
-          bold: isFontBold,
-          italic: isFontItalic,
-          hasBg: hasTextBg
-        });
-        recordedTextNotes.push(val); // 记录文本指令供 AI 改图继承
-        redoHistory = [];
-        redrawAnnotations();
-      }
+    setTimeout(() => {
+      inlineTextInput.focus();
+    }, 30);
+  }
+
+  function commitTextInput() {
+    if (inlineTextInput.style.display !== 'block') return;
+    const val = inlineTextInput.value.trim();
+    if (val) {
+      annotHistory.push({
+        type: 'text',
+        text: val,
+        x: currentTextX,
+        y: currentTextY,
+        color: activeColor,
+        fontSize: activeFontSize,
+        bold: isFontBold,
+        italic: isFontItalic,
+        hasBg: hasTextBg
+      });
+      recordedTextNotes.push(val);
+      redoHistory = [];
+      redrawAnnotations();
+    }
+    inlineTextInput.value = '';
+    inlineTextInput.style.display = 'none';
+  }
+
+  // 绑定一次输入框事件
+  inlineTextInput.addEventListener('blur', () => {
+    setTimeout(commitTextInput, 60);
+  });
+  inlineTextInput.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.shiftKey) {
+      ev.preventDefault();
+      commitTextInput();
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      inlineTextInput.value = '';
       inlineTextInput.style.display = 'none';
-      inlineTextInput.removeEventListener('blur', commitText);
-    };
+    }
+  });
 
-    inlineTextInput.addEventListener('blur', commitText);
-    inlineTextInput.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter' && !ev.shiftKey) {
-        ev.preventDefault();
-        inlineTextInput.blur();
+  /**
+   * 10. 鼠标事件交互中心
+   */
+  stageContainer.addEventListener('mousedown', (e) => {
+    if (e.button === 2) {
+      handleRightClick();
+      return;
+    }
+    if (e.target.closest('#inlineTextInput')) return;
+
+    const rect = stageContainer.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // A. 橡皮擦模式
+    if (activeTool === 'eraser') {
+      eraseAtPoint(x, y);
+      return;
+    }
+
+    // B. 序号模式
+    if (activeTool === 'number') {
+      addNumberBadge(x, y);
+      return;
+    }
+
+    // C. 打字模式
+    if (activeTool === 'text') {
+      activateTextInput(x, y);
+      return;
+    }
+
+    // D. 标注绘图模式
+    if (activeTool) {
+      commitTextInput();
+      isDrawing = true;
+      drawStart = { x, y };
+      if (activeTool === 'brush' || activeTool === 'marker') {
+        brushPoints = [{ x, y }];
       }
-    });
+      return;
+    }
+
+    // E. 无激活工具：允许按住截图整体平移窗口
+    isWindowMoving = true;
+    winDragStart = { x: e.screenX, y: e.screenY };
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (isWindowMoving) {
+      const dx = e.screenX - winDragStart.x;
+      const dy = e.screenY - winDragStart.y;
+      winDragStart = { x: e.screenX, y: e.screenY };
+      window.moveBy(dx, dy);
+      return;
+    }
+
+    if (isDrawing && activeTool) {
+      const rect = stageContainer.getBoundingClientRect();
+      const x = Math.max(0, Math.min(stageWidth, e.clientX - rect.left));
+      const y = Math.max(0, Math.min(stageHeight, e.clientY - rect.top));
+      renderActiveDrawing(x, y);
+    }
+  });
+
+  window.addEventListener('mouseup', (e) => {
+    if (isWindowMoving) {
+      isWindowMoving = false;
+      return;
+    }
+
+    if (isDrawing) {
+      isDrawing = false;
+      const rect = stageContainer.getBoundingClientRect();
+      const x = Math.max(0, Math.min(stageWidth, e.clientX - rect.left));
+      const y = Math.max(0, Math.min(stageHeight, e.clientY - rect.top));
+      commitActiveDrawing(x, y);
+    }
+  });
+
+  // 鼠标滚轮调节粗细 / 颗粒度
+  window.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? 1 : -1;
+
+    if (activeTool === 'mosaic' || activeTool === 'blur') {
+      mosaicRadius = Math.max(4, Math.min(32, mosaicRadius + delta * 2));
+      rngMosaicSize.value = mosaicRadius;
+      valMosaicSize.textContent = mosaicRadius;
+      subParamBadge.textContent = mosaicRadius + 'px';
+    } else {
+      activeSize = Math.max(1, Math.min(64, activeSize + delta));
+      subParamBadge.textContent = activeSize + 'px';
+    }
+  }, { passive: false });
+
+  // 右键三级取消
+  function handleRightClick() {
+    if (inlineTextInput.style.display === 'block') {
+      inlineTextInput.value = '';
+      inlineTextInput.style.display = 'none';
+      return;
+    }
+    if (isDrawing) {
+      isDrawing = false;
+      brushPoints = [];
+      redrawAnnotations();
+      return;
+    }
+    if (activeTool) {
+      activeTool = null;
+      toolBtns.forEach(b => b.classList.remove('active'));
+      subPalette.style.display = 'none';
+      stageContainer.style.cursor = 'move';
+      return;
+    }
+    // 无工具且无动作时退出截图
+    finishWithAction('cancel');
   }
 
   /**
-   * 7. 工具栏与二级属性交互
+   * 11. 工具栏与属性栏控制
    */
   toolBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       const tool = btn.dataset.tool;
+      commitTextInput();
+
       if (activeTool === tool) {
-        // 复合按钮再次点击切换子工具
+        // 复合按钮再点击切换子类型
         if (tool === 'rect') {
           activeTool = 'ellipse';
           btn.dataset.tool = 'ellipse';
@@ -921,33 +691,22 @@
           activeTool = 'mosaic';
           btn.dataset.tool = 'mosaic';
           btn.title = '马赛克 (K)';
-        } else {
-          // 非复合按钮关闭
-          activeTool = null;
-          btn.classList.remove('active');
-          subPalette.style.display = 'none';
-          updateToolbarPosition();
-          return;
         }
       } else {
-        toolBtns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
         activeTool = tool;
       }
 
-      openSubPaletteForTool(activeTool);
-      updateToolbarPosition();
+      toolBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      stageContainer.style.cursor = activeTool === 'eraser' ? 'cell' : 'crosshair';
+
+      // 展开二级属性栏
+      showSubPaletteForTool(activeTool);
     });
   });
 
-  function openSubPaletteForTool(tool) {
-    if (!tool) {
-      subPalette.style.display = 'none';
-      return;
-    }
+  function showSubPaletteForTool(tool) {
     subPalette.style.display = 'flex';
-
-    // 隐藏所有特定子区
     subShapeOptions.style.display = 'none';
     subLineOptions.style.display = 'none';
     subMosaicOptions.style.display = 'none';
@@ -960,22 +719,41 @@
     } else if (tool === 'arrow' || tool === 'line') {
       subLineOptions.style.display = 'flex';
       subParamBadge.textContent = activeSize + 'px';
+    } else if (tool === 'brush') {
+      subParamBadge.textContent = activeSize + 'px';
+    } else if (tool === 'marker') {
+      subParamBadge.textContent = Math.max(12, activeSize * 3) + 'px';
     } else if (tool === 'mosaic' || tool === 'blur') {
       subMosaicOptions.style.display = 'flex';
       blurModeLabel.textContent = tool === 'blur' ? '平滑模糊' : '马赛克';
       subParamBadge.textContent = mosaicRadius + 'px';
     } else if (tool === 'number') {
       subNumberOptions.style.display = 'flex';
-      subParamBadge.textContent = '序号';
+      subParamBadge.textContent = '#' + currentNumberCount;
     } else if (tool === 'text') {
       subTextOptions.style.display = 'flex';
       subParamBadge.textContent = activeFontSize + 'px';
-    } else if (tool === 'marker') {
-      subParamBadge.textContent = (activeSize * 3) + 'px';
-    } else {
-      subParamBadge.textContent = activeSize + 'px';
+    } else if (tool === 'eraser') {
+      subPalette.style.display = 'none';
     }
   }
+
+  // 撤销 / 重做
+  btnUndo.addEventListener('click', () => {
+    commitTextInput();
+    if (annotHistory.length > 0) {
+      redoHistory.push(annotHistory.pop());
+      redrawAnnotations();
+    }
+  });
+
+  btnRedo.addEventListener('click', () => {
+    commitTextInput();
+    if (redoHistory.length > 0) {
+      annotHistory.push(redoHistory.pop());
+      redrawAnnotations();
+    }
+  });
 
   // 形状：填充开关
   btnToggleFill.addEventListener('click', () => {
@@ -1021,6 +799,7 @@
   // 序号重置
   btnResetNumber.addEventListener('click', () => {
     currentNumberCount = 1;
+    subParamBadge.textContent = '#1';
     btnResetNumber.querySelector('span').textContent = '已重置 ①';
     setTimeout(() => {
       btnResetNumber.querySelector('span').textContent = '序号重置 ①';
@@ -1053,86 +832,40 @@
       activeColor = dot.dataset.color;
       currentSwatch.style.backgroundColor = activeColor;
       nativeColorPicker.value = activeColor;
+      if (inlineTextInput.style.display === 'block') {
+        inlineTextInput.style.color = activeColor;
+      }
     });
   });
 
-  // 原生拾色器
-  currentSwatch.addEventListener('click', () => nativeColorPicker.click());
-  nativeColorPicker.addEventListener('input', () => {
-    activeColor = nativeColorPicker.value;
+  nativeColorPicker.addEventListener('input', (e) => {
+    activeColor = e.target.value;
     currentSwatch.style.backgroundColor = activeColor;
     palDots.forEach(d => d.classList.remove('active'));
   });
 
-  // 撤销 (Ctrl+Z)
-  btnUndo.addEventListener('click', () => {
-    if (annotHistory.length > 0) {
-      const popped = annotHistory.pop();
-      redoHistory.push(popped);
-      if (popped.type === 'rect') recordedBoxes.pop();
-      if (popped.type === 'text') recordedTextNotes.pop();
-      redrawAnnotations();
-    }
-  });
-
-  // 重做 (Ctrl+Y)
-  btnRedo.addEventListener('click', () => {
-    if (redoHistory.length > 0) {
-      const popped = redoHistory.pop();
-      annotHistory.push(popped);
-      if (popped.type === 'rect') {
-        recordedBoxes.push({
-          x: Math.round(popped.x - selRect.x),
-          y: Math.round(popped.y - selRect.y),
-          w: Math.round(popped.w),
-          h: Math.round(popped.h)
-        });
-      }
-      if (popped.type === 'text') recordedTextNotes.push(popped.text);
-      redrawAnnotations();
-    }
-  });
-
   /**
-   * 8. 三图分离导出与动作派发
+   * 12. 产物导出与业务触发 (独家三图分离架构)
    */
   function exportCaptureData() {
-    if (selRect.w <= 0 || selRect.h <= 0) return null;
+    commitTextInput();
+    if (!stageWidth || !stageHeight) return null;
 
-    let realW = selRect.w;
-    let realH = selRect.h;
+    // 1. 干净底图 (Clean)
     const cleanCanvas = document.createElement('canvas');
+    cleanCanvas.width = stageWidth;
+    cleanCanvas.height = stageHeight;
     const cCtx = cleanCanvas.getContext('2d');
-
-    if (isRegionMode) {
-      realW = fullSnapshotImg.naturalWidth;
-      realH = fullSnapshotImg.naturalHeight;
-      cleanCanvas.width = realW;
-      cleanCanvas.height = realH;
-      cCtx.drawImage(fullSnapshotImg, 0, 0, realW, realH);
-    } else {
-      const scaleX = fullSnapshotImg.naturalWidth / screenWidth;
-      const scaleY = fullSnapshotImg.naturalHeight / screenHeight;
-      const realX = Math.round(selRect.x * scaleX);
-      const realY = Math.round(selRect.y * scaleY);
-      realW = Math.round(selRect.w * scaleX);
-      realH = Math.round(selRect.h * scaleY);
-      cleanCanvas.width = realW;
-      cleanCanvas.height = realH;
-      cCtx.drawImage(fullSnapshotImg, realX, realY, realW, realH, 0, 0, realW, realH);
-    }
+    cCtx.drawImage(bgCanvas, 0, 0);
     const cleanDataUrl = cleanCanvas.toDataURL('image/png');
 
-    // 2. 带涂鸦的完整图
+    // 2. 带涂鸦的完整合成图 (Annotated)
     const annotCanvasMerged = document.createElement('canvas');
-    annotCanvasMerged.width = cleanCanvas.width;
-    annotCanvasMerged.height = cleanCanvas.height;
+    annotCanvasMerged.width = stageWidth;
+    annotCanvasMerged.height = stageHeight;
     const aCtx = annotCanvasMerged.getContext('2d');
-    aCtx.drawImage(cleanCanvas, 0, 0);
-    aCtx.drawImage(annotCanvas,
-      selRect.x * dpr, selRect.y * dpr, selRect.w * dpr, selRect.h * dpr,
-      0, 0, cleanCanvas.width, cleanCanvas.height
-    );
+    aCtx.drawImage(bgCanvas, 0, 0);
+    aCtx.drawImage(annotCanvas, 0, 0);
     const annotatedDataUrl = annotCanvasMerged.toDataURL('image/png');
 
     // 3. 构建三图分离包
@@ -1173,25 +906,10 @@
       }), 'utf-8');
     } catch (e) {}
 
-    try {
-      localStorage.setItem('rubick_last_capture_result', JSON.stringify({
-        action: actionType,
-        data: data,
-        timestamp: Date.now()
-      }));
-    } catch (e) {}
-
-    if (window.onCaptureFinished) {
-      window.onCaptureFinished(actionType, data);
-    } else if (window.opener && window.opener.onSubWindowCaptureFinished) {
-      window.opener.onSubWindowCaptureFinished(actionType, data);
-      window.close();
-    } else {
-      window.close();
-    }
+    window.close();
   }
 
-  // 动作按钮绑定
+  // 按钮事件绑定
   actAiEdit.addEventListener('click', () => finishWithAction('ai_edit'));
   actOcr.addEventListener('click', () => finishWithAction('ocr'));
   actPin.addEventListener('click', () => finishWithAction('pin'));
@@ -1209,10 +927,10 @@
   actCancel.addEventListener('click', () => finishWithAction('cancel'));
   actConfirm.addEventListener('click', () => finishWithAction('copy'));
 
-  // 双击选区直接复制完成
-  selectionBox.addEventListener('dblclick', () => finishWithAction('copy'));
+  // 双击截图直接复制并关闭
+  stageContainer.addEventListener('dblclick', () => finishWithAction('copy'));
 
-  // 键盘全局快捷键 (1:1 对齐 Snipaste 快捷键表)
+  // 键盘快捷键 (1:1 对齐 Snipaste)
   window.addEventListener('keydown', (e) => {
     if (inlineTextInput.style.display === 'block') return;
 
@@ -1231,14 +949,7 @@
     } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
       e.preventDefault();
       btnRedo.click();
-    } else if (e.key === 'c' || e.key === 'C') {
-      const hex = magnifier.dataset.currentColor;
-      if (hex && !isSelected) {
-        navigator.clipboard.writeText(hex);
-        magHexText.textContent = '已复制 ' + hex;
-      }
     } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-      // 字母快捷键直切工具
       const k = e.key.toLowerCase();
       if (k === 'r') document.getElementById('toolShape').click();
       else if (k === 'e') { activeTool = 'ellipse'; document.getElementById('toolShape').click(); }

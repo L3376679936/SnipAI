@@ -7,43 +7,20 @@
   <link rel="stylesheet" href="src/capture.css">
 </head>
 <body>
-  <!-- 底层全屏渲染画布与涂鸦层 -->
+  <!-- 截图主舞台与图元涂鸦层 -->
   <div id="stageContainer" class="stage-container">
     <canvas id="bgCanvas"></canvas>
     <canvas id="annotCanvas"></canvas>
-  </div>
 
-  <!-- 选区遮罩与 8 控制点手柄 -->
-  <div id="selectionBox" class="selection-box" style="display: none;">
-    <!-- 8 控制点 -->
-    <div class="handle handle-nw" data-handle="nw"></div>
-    <div class="handle handle-n" data-handle="n"></div>
-    <div class="handle handle-ne" data-handle="ne"></div>
-    <div class="handle handle-e" data-handle="e"></div>
-    <div class="handle handle-se" data-handle="se"></div>
-    <div class="handle handle-s" data-handle="s"></div>
-    <div class="handle handle-sw" data-handle="sw"></div>
-    <div class="handle handle-w" data-handle="w"></div>
-
-    <!-- 尺寸徽章提示 -->
+    <!-- 尺寸徽章提示 (左上角浮动胶囊) -->
     <div id="sizeBadge" class="size-badge">0 × 0 px</div>
+
+    <!-- 行内文字输入框 -->
+    <textarea id="inlineTextInput" class="inline-text-input" style="display: none;" placeholder="输入文字... (Enter 确定, Esc 取消)" rows="1"></textarea>
   </div>
 
-  <!-- 像素放大镜与取色器 -->
-  <div id="magnifier" class="magnifier-box" style="display: none;">
-    <canvas id="magCanvas" width="130" height="130"></canvas>
-    <div class="mag-meta">
-      <div class="mag-color-row">
-        <span id="magColorSample" class="color-sample"></span>
-        <span id="magHexText" class="hex-text">#000000</span>
-      </div>
-      <span id="magRgbText" class="rgb-text">RGB(0, 0, 0)</span>
-      <span class="mag-tip">按 C 复制色值 · 滚轮微调</span>
-    </div>
-  </div>
-
-  <!-- 悬浮工具栏外层包裹 (跟随选区绝对定位) -->
-  <div id="toolbarWrap" class="toolbar-wrap" style="display: none;">
+  <!-- 悬浮工具栏外层包裹 (吸附于截图右下角) -->
+  <div id="toolbarWrap" class="toolbar-wrap">
     <!-- 专业二级属性栏 (随工具动态自适应排布) -->
     <div id="subPalette" class="sub-palette" style="display: none;">
       <!-- 1. 主参数胶囊 (当前笔宽/颗粒度，滚轮可快速调节) -->
@@ -241,9 +218,6 @@
       </div>
     </div>
   </div>
-
-  <!-- 行内文本输入框 -->
-  <textarea id="inlineTextInput" class="inline-text-input" style="display: none;" rows="1"></textarea>
 
   <script src="src/capture.js"></script>
 </body>

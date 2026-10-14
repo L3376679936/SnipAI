@@ -150,23 +150,69 @@ window.nativeBridge = {
           const CAPTURE_IPC_FILE = path.join(os.tmpdir(), 'rubick_capture_ipc_result.json');
           try { if (fs.existsSync(CAPTURE_IPC_FILE)) fs.unlinkSync(CAPTURE_IPC_FILE); } catch (e) {}
 
-          // 3. 弹出全屏置顶透明截屏标注窗口 capture.html
+          // 3. 计算用户截图所在的屏幕位置与尺寸，精准定位窗口，绝不跳主屏、绝无白底白闪
+          const point = (window.utools.getCursorScreenPoint && window.utools.getCursorScreenPoint()) || { x: 0, y: 0 };
+          const display = (window.utools.getDisplayNearestPoint && window.utools.getDisplayNearestPoint(point)) || {
+            bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+            scaleFactor: 1
+          };
+
+          // 解析截图物理尺寸
+          let imgWidth = 800;
+          let imgHeight = 600;
+          try {
+            const { nativeImage } = require('electron');
+            const nImg = nativeImage.createFromDataURL(dataUrl);
+            const sz = nImg.getSize();
+            if (sz && sz.width > 0 && sz.height > 0) {
+              imgWidth = sz.width;
+              imgHeight = sz.height;
+            }
+          } catch (e) {
+            logDebug(`nativeImage 提取尺寸异常: ${e.message}`);
+          }
+
+          // 工具栏最小宽度 530px，预留底部工具栏高度 80px
+          const TOOLBAR_WIDTH = 530;
+          const TOOLBAR_HEIGHT = 80;
+          const winWidth = Math.max(imgWidth, TOOLBAR_WIDTH);
+          const winHeight = imgHeight + TOOLBAR_HEIGHT + 14;
+
+          // 按照用户截图终点（光标点）反推窗口左上角
+          let winX = point.x - imgWidth;
+          let winY = point.y - imgHeight;
+
+          // 限制在当前显示器物理区域内，彻底杜绝跨屏跳跃到主屏
+          const db = display.bounds || { x: 0, y: 0, width: 1920, height: 1080 };
+          if (winX < db.x) winX = db.x;
+          if (winX + winWidth > db.x + db.width) winX = Math.max(db.x, db.x + db.width - winWidth);
+          if (winY < db.y) winY = db.y;
+          if (winY + winHeight > db.y + db.height) winY = Math.max(db.y, db.y + db.height - winHeight);
+
+          logDebug(`悬浮工具栏精准定位: [${winX}, ${winY}], 尺寸: ${winWidth}x${winHeight}, 屏幕: ${JSON.stringify(db)}`);
+
+          // 4. 弹出置顶透明截图标注窗口 capture.html (指定当前屏幕坐标 + 100% 透明背景色)
           let captureWin = null;
           try {
             captureWin = window.utools.createBrowserWindow('capture.html', {
               title: '截图标注与悬浮工具栏',
+              x: Math.round(winX),
+              y: Math.round(winY),
+              width: Math.round(winWidth),
+              height: Math.round(winHeight),
               frame: false,
               alwaysOnTop: true,
               transparent: true,
-              fullscreen: true,
+              backgroundColor: '#00000000', // 100% 纯透明底色，彻底消除白屏与白蒙版！
               skipTaskbar: true,
               resizable: false,
+              minimizable: false,
               useContentSize: true
             }, () => {
               if (captureWin && captureWin.webContents) {
                 captureWin.webContents.executeJavaScript(`
-                  if (window.loadScreenSnapshot) {
-                    window.loadScreenSnapshot(${JSON.stringify(dataUrl)}, { isRegion: true });
+                  if (window.loadCroppedImage) {
+                    window.loadCroppedImage(${JSON.stringify(dataUrl)}, ${imgWidth}, ${imgHeight});
                   }
                 `);
               }

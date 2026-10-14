@@ -1,6 +1,35 @@
 # REFACTOR_LOG - 项目迭代与重构全局记录
 
-## [2026-10-14] 重磅升级：研发纯 JS 选区悬浮工具栏截屏引擎（`capture.html`），1:1 像素级对齐 C# Snipper 18 项工具与二级属性栏，兼获原生体感与 100% 市场零二进制过审（`release/utools-pure-js`）
+## [2026-10-14] 核心交互修复：彻底根治副屏截图跳主屏与白底蒙版白闪，修复写字打字与马赛克工具失效 Bug（`release/utools-pure-js`）
+
+### 变更背景与用户核心痛点
+- **用户核心痛点反馈**：
+  1. *“写字和马赛克工具不能使用”*；
+  2. *“这个选完截图区域跟原本的效果不对啊，是不是实现方式不对啊，怎么蒙版白底了，并且自动切到我主屏了”*。
+- **根因定位**：
+  1. **切到主屏与白底蒙版根因**：此前在 `preload.js` 中创建 `capture.html` 时使用了 `{ fullscreen: true }` 且未指定具体坐标与 `backgroundColor`。在 Windows 多屏环境下，Electron 全屏窗口强制回退到主屏（Display 0），且默认背景为不透明纯白导致瞬间白闪；同时内部用半透明黑底盖住全屏并将截图居中呈现，完全违背了用户在副屏划定选区后“悬浮工具栏就近紧贴选区”的本能直觉。
+  2. **马赛克工具失效根因**：`drawMosaic` 在鼠标拖拽起始微小位移时 `w < 1` 或 `h < 1`，传给离屏 Canvas 导致 `getImageData(0, 0, 0, 0)` 抛出未捕获的 `IndexSizeError` 异常，中断了整个鼠标事件循环。
+  3. **写字工具失效根因**：`showInlineTextInput` 在鼠标 `mousedown` 中调用了 `inlineTextInput.focus()`，但由于紧接着的 `mouseup` 发生在 Canvas/Window 上，Chromium 默认点击行为将焦点移出，瞬间触发了 `blur` 事件并执行了 `commitText`，导致输入框仅露脸 1 毫秒便自动销毁，用户根本无法敲字。
+
+### 核心改造与修复明细
+1. **就近原位呈现架构：精准多屏定位 + 100% 透明无边框 + 杜绝白闪（[`preload.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/preload.js)）**：
+   - 彻底废弃全屏模式（`fullscreen: false`）；
+   - 通过 `utools.getCursorScreenPoint()` 与 `utools.getDisplayNearestPoint()` 获取用户截图完成时光标所在的精确屏幕 `display.bounds`；
+   - 解析截图物理像素尺寸，以用户截图终点为锚点动态计算窗口坐标 `[winX, winY]` 与精准窗口尺寸 `winWidth × winHeight`（工具栏底栏宽度 `530px`，贴合截图尺寸）；
+   - 设置 `backgroundColor: '#00000000'`，100% 纯透明无边框窗口，彻底消除白色背景与全屏深灰蒙版遮罩，窗口原位呈现在用户截图所在的屏幕，毫秒级就绪！
+2. **写字打字标注工具彻底修复（[`capture.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/capture.js)、[`capture.css`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/capture.css)）**：
+   - 输入框事件监听器全局仅绑定一次，杜绝重复绑定与内存泄漏；
+   - 采用 `setTimeout(() => inlineTextInput.focus(), 30)` 避开 `mouseup` 焦点抢占；
+   - 支持高对比度暗色半透明底衬、输入时按 `Enter` 提交、`Shift+Enter` 换行、`Escape` 取消，失焦安全提交；
+   - Canvas 绘制时统一 `textBaseline = 'top'` 与选区坐标对齐，字体加粗/斜体/背景遮罩/字号全属性生效。
+3. **马赛克与高斯模糊工具彻底修复（[`capture.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/capture.js)）**：
+   - 增加严密边界防护：`mx, my, mw, mh` 四舍五入为整型，增加 `mw < 2 || mh < 2` 退出守卫；
+   - 采用 1:1 离屏干净底图缓冲层（`sourceOffscreenCtx`）进行像素级安全取样，杜绝 `IndexSizeError`；
+   - 高斯模糊采用局部 `clip()` + `ctx.filter = blur(...)` 原图绘制，丝滑流畅零卡顿。
+4. **窗口自由拖移与原生手感对齐**：
+   - 当未激活任何工具时，在截图区域按住鼠标可平滑整体拖动悬浮窗口（`window.moveBy`），双击立即复制并关闭，右键逐级取消，体验 1:1 对齐 Snipaste。
+
+---
 
 ### 变更背景与用户核心诉求
 - **用户核心诉求**：追求“选区右下角必须漂浮工具栏”的原生截屏体感（1:1 媲美 Snipaste / 原版 C# Snipper），同时要求必须 100% 能够顺利通过 uTools 官方插件市场的零二进制审核。在初版简单实现后，严格核查原版功能，针对用户指出的遗漏功能进行全量地毯式对照与重构补齐。
