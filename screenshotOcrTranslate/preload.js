@@ -146,52 +146,74 @@ window.nativeBridge = {
           const dataUrl = base64Str.startsWith('data:') ? base64Str : `data:image/png;base64,${base64Str}`;
           logDebug(`屏幕采样成功 (数据大小: ${dataUrl.length})，立即唤起悬浮工具栏交互层`);
 
-          // 2. 清理临时 IPC 结果文件
+          // 2. 清理临时 IPC 与初始化文件
           const CAPTURE_IPC_FILE = path.join(os.tmpdir(), 'rubick_capture_ipc_result.json');
+          const CAPTURE_INIT_FILE = path.join(os.tmpdir(), 'rubick_capture_init.json');
           try { if (fs.existsSync(CAPTURE_IPC_FILE)) fs.unlinkSync(CAPTURE_IPC_FILE); } catch (e) {}
+          try { if (fs.existsSync(CAPTURE_INIT_FILE)) fs.unlinkSync(CAPTURE_INIT_FILE); } catch (e) {}
 
-          // 3. 计算用户截图所在的屏幕位置与尺寸，精准定位窗口，绝不跳主屏、绝无白底白闪
+          // 3. 计算用户截图所在的屏幕位置与 DPI 缩放比，精准换算逻辑尺寸
           const point = (window.utools.getCursorScreenPoint && window.utools.getCursorScreenPoint()) || { x: 0, y: 0 };
           const display = (window.utools.getDisplayNearestPoint && window.utools.getDisplayNearestPoint(point)) || {
             bounds: { x: 0, y: 0, width: 1920, height: 1080 },
             scaleFactor: 1
           };
+          const scale = display.scaleFactor || 1;
 
-          // 解析截图物理尺寸
-          let imgWidth = 800;
-          let imgHeight = 600;
+          // 解析截图物理像素尺寸
+          let physW = 800;
+          let physH = 600;
           try {
             const { nativeImage } = require('electron');
             const nImg = nativeImage.createFromDataURL(dataUrl);
             const sz = nImg.getSize();
             if (sz && sz.width > 0 && sz.height > 0) {
-              imgWidth = sz.width;
-              imgHeight = sz.height;
+              physW = sz.width;
+              physH = sz.height;
             }
           } catch (e) {
             logDebug(`nativeImage 提取尺寸异常: ${e.message}`);
           }
 
-          // 工具栏最小宽度 530px，预留底部工具栏高度 80px
+          // 核心修复：必须除以 scaleFactor 换算为屏幕 DIP (逻辑像素)！彻底杜绝图片自动放大全屏与工具栏掉出屏幕！
+          const logicalW = Math.max(10, Math.round(physW / scale));
+          const logicalH = Math.max(10, Math.round(physH / scale));
+
+          // 工具栏预留宽度与高度
           const TOOLBAR_WIDTH = 530;
-          const TOOLBAR_HEIGHT = 80;
-          const winWidth = Math.max(imgWidth, TOOLBAR_WIDTH);
-          const winHeight = imgHeight + TOOLBAR_HEIGHT + 14;
+          const TOOLBAR_HEIGHT = 86;
+          const winWidth = Math.max(logicalW, TOOLBAR_WIDTH);
+          const winHeight = logicalH + TOOLBAR_HEIGHT + 14;
 
           // 按照用户截图终点（光标点）反推窗口左上角
-          let winX = point.x - imgWidth;
-          let winY = point.y - imgHeight;
+          let winX = point.x - logicalW;
+          let winY = point.y - logicalH;
 
-          // 限制在当前显示器物理区域内，彻底杜绝跨屏跳跃到主屏
+          // 限制在当前显示器边界内，绝不跨屏跳跃到主屏
           const db = display.bounds || { x: 0, y: 0, width: 1920, height: 1080 };
           if (winX < db.x) winX = db.x;
           if (winX + winWidth > db.x + db.width) winX = Math.max(db.x, db.x + db.width - winWidth);
           if (winY < db.y) winY = db.y;
           if (winY + winHeight > db.y + db.height) winY = Math.max(db.y, db.y + db.height - winHeight);
 
-          logDebug(`悬浮工具栏精准定位: [${winX}, ${winY}], 尺寸: ${winWidth}x${winHeight}, 屏幕: ${JSON.stringify(db)}`);
+          logDebug(`悬浮工具栏精准定位: [${winX}, ${winY}], 尺寸: ${winWidth}x${winHeight}, scale=${scale}, 屏幕: ${JSON.stringify(db)}`);
 
-          // 4. 弹出置顶透明截图标注窗口 capture.html (指定当前屏幕坐标 + 100% 透明背景色)
+          // 4. 写入本地初始化文件，实现 100% 同步且防竞争的数据注入
+          const initPayload = {
+            dataUrl: dataUrl,
+            physW: physW,
+            physH: physH,
+            logicalW: logicalW,
+            logicalH: logicalH,
+            scale: scale
+          };
+          try {
+            fs.writeFileSync(CAPTURE_INIT_FILE, JSON.stringify(initPayload), 'utf-8');
+          } catch (initErr) {
+            logDebug(`写入 CAPTURE_INIT_FILE 异常: ${initErr.message}`);
+          }
+
+          // 5. 弹出置顶透明截图标注窗口 capture.html (指定当前屏幕坐标 + 100% 透明背景色)
           let captureWin = null;
           try {
             captureWin = window.utools.createBrowserWindow('capture.html', {
@@ -211,8 +233,8 @@ window.nativeBridge = {
             }, () => {
               if (captureWin && captureWin.webContents) {
                 captureWin.webContents.executeJavaScript(`
-                  if (window.loadCroppedImage) {
-                    window.loadCroppedImage(${JSON.stringify(dataUrl)}, ${imgWidth}, ${imgHeight});
+                  if (window.loadFromInitData) {
+                    window.loadFromInitData(${JSON.stringify(initPayload)});
                   }
                 `);
               }

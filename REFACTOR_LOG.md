@@ -1,6 +1,23 @@
 # REFACTOR_LOG - 项目迭代与重构全局记录
 
-## [2026-10-14] 核心交互修复：彻底根治副屏截图跳主屏与白底蒙版白闪，修复写字打字与马赛克工具失效 Bug（`release/utools-pure-js`）
+## [2026-10-14] 核心 Bug 修复：解决 High-DPI 缩放导致截图图片自动放大全屏与工具栏超出版面丢失问题（`release/utools-pure-js`）
+
+### 变更背景与用户核心痛点
+- **用户痛点反馈**：*“截图完，图片自动放大全屏了，且没有显示工具栏”*。
+- **根因定位**：
+  1. **图片放大全屏根因**：Windows 系统通常默认开启 125%、150% 或 200% 的 DPI 缩放（`scaleFactor > 1`）。`utools.screenCapture` 返回的 Base64 图片是**物理像素尺寸**（如 1920×1080），而 Electron `BrowserWindow` 的坐标与尺寸单位是**逻辑像素 (DIP)**（150% 缩放下 1080p 屏幕的逻辑尺寸仅为 1280×720）。此前未将物理尺寸除以 `scaleFactor`，导致把 1920×1080 逻辑像素传给了窗口，使窗口和图片被放大了 1.5 倍至 2 倍，瞬间撑爆整个屏幕（表现为“自动放大全屏”）。
+  2. **工具栏没有显示根因**：第一，由于窗口被放大超出屏幕物理边界，位于底部的工具栏被直接顶到了屏幕外侧（任务栏下方/视口外）；第二，此前 `capture.js` 将工具栏死板定位在 `top: stageHeight + 8px`，在全屏或大图截屏时没有做视口智能翻转；第三，`createBrowserWindow` 回调中的 `executeJavaScript` 存在与 `capture.html` 渲染进程的时序竞争，偶尔导致数据未能挂载。
+
+### 核心改造与修复明细
+1. **DPI 缩放比感知与逻辑/物理双轨换算（[`preload.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/preload.js)）**：
+   - 提取 `display.scaleFactor`，将 `physW` 与 `physH` 严格除以 `scale` 换算为屏幕真实 DIP 尺寸 `logicalW` 与 `logicalH`；
+   - 窗口尺寸精确匹配 `Math.max(logicalW, 530)` 与 `logicalH + 86`，1:1 像素级贴合截图，彻底消除“放大全屏”异象！
+2. **Snipaste 经典智能停靠：自适应底部与内部右下角翻转（[`capture.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/capture.js)）**：
+   - 在 `updateToolbarPosition()` 中动态计算视口余量：若下方空间充足，工具栏吸附于截图外侧底部；若下方空间不足（如全屏截图或贴底截图），**工具栏自动智能翻转停靠在截图内部右下角**，确保 100% 可见、绝不掉出屏幕！
+3. **本地 Init Payload 同步注入，彻底杜绝数据丢失**：
+   - 在 `os.tmpdir()` 写入 `rubick_capture_init.json`，`capture.html` 在 `DOMContentLoaded` 与 `loadFromInitData` 两个通道双重保险载入数据，零异步竞争，秒级渲染！
+
+---
 
 ### 变更背景与用户核心痛点
 - **用户核心痛点反馈**：

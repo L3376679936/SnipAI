@@ -1,5 +1,5 @@
 /**
- * capture.js - 纯 JS 原生截图标注与悬浮工具栏引擎 (无白屏/无跳屏/全功能版)
+ * capture.js - 纯 JS 原生截图标注与悬浮工具栏引擎 (DPI 比例感知 + 智能停靠 + 零跳屏)
  * 1:1 对齐 Snipaste / 原版 C# Snipper 18 项工具与二级属性栏
  */
 
@@ -64,20 +64,26 @@
   const actSave = document.getElementById('actSave');
   const actConfirm = document.getElementById('actConfirm');
 
-  // 2. 画布与交互核心状态
-  let stageWidth = 0;
-  let stageHeight = 0;
-  let fullSnapshotImg = null;
-  let sourceOffscreenCanvas = null; // 1:1 纯净底图采样画布 (用于马赛克与干净导出)
-  let sourceOffscreenCtx = null;
+  // 2. 状态变量
+  let stageWidth = 0;   // 逻辑宽度 (CSS px)
+  let stageHeight = 0;  // 逻辑高度 (CSS px)
+  let physicalW = 0;    // 物理分辨率
+  let physicalH = 0;    // 物理分辨率
+  let scaleRatioX = 1;  // 物理 / 逻辑 缩放比
+  let scaleRatioY = 1;
 
-  let activeTool = null; // 'rect' | 'ellipse' | 'line' | 'arrow' | 'brush' | 'marker' | 'mosaic' | 'blur' | 'text' | 'number' | 'eraser'
+  let fullSnapshotImg = null;
+  let sourceOffscreenCanvas = null; // 1:1 物理像素纯净缓冲
+  let sourceOffscreenCtx = null;
+  let isStageLoaded = false;
+
+  let activeTool = null; // 当前激活工具
   let activeColor = '#ef4444';
   let activeSize = 4;
   let isFilled = false;
   let isDashed = false;
-  let arrowStyle = 'single'; // 'single' | 'double' | 'line'
-  let blurMode = 'mosaic'; // 'mosaic' | 'blur'
+  let arrowStyle = 'single';
+  let blurMode = 'mosaic';
   let mosaicRadius = 10;
   let currentNumberCount = 1;
   let activeFontSize = 16;
@@ -85,14 +91,14 @@
   let isFontItalic = false;
   let hasTextBg = false;
 
-  // 绘图与拖拽状态
+  // 绘图与拖拽
   let isDrawing = false;
   let drawStart = { x: 0, y: 0 };
   let brushPoints = [];
   let currentTextX = 0;
   let currentTextY = 0;
 
-  // 窗口拖动状态 (无激活工具时拖动窗口)
+  // 窗口平移
   let isWindowMoving = false;
   let winDragStart = { x: 0, y: 0 };
 
@@ -103,51 +109,120 @@
   let recordedTextNotes = [];
 
   /**
-   * 3. 核心初始化：载入截图并排版
+   * 3. 核心初始化：解析物理/逻辑像素并建立画布渲染
    */
-  window.loadCroppedImage = function (dataUrl, imgW, imgH) {
+  function initCaptureStage(initPayload) {
+    if (!initPayload || !initPayload.dataUrl || isStageLoaded) return;
+    isStageLoaded = true;
+
+    const dataUrl = initPayload.dataUrl;
+    const deviceScale = initPayload.scale || window.devicePixelRatio || 1;
+
     fullSnapshotImg = new Image();
     fullSnapshotImg.onload = () => {
-      stageWidth = imgW || fullSnapshotImg.naturalWidth;
-      stageHeight = imgH || fullSnapshotImg.naturalHeight;
+      physicalW = initPayload.physW || fullSnapshotImg.naturalWidth;
+      physicalH = initPayload.physH || fullSnapshotImg.naturalHeight;
 
+      // 严格除以 DPI scaleFactor 得到屏幕实际逻辑尺寸，彻底解决自动放大全屏问题！
+      stageWidth = initPayload.logicalW || Math.round(physicalW / deviceScale);
+      stageHeight = initPayload.logicalH || Math.round(physicalH / deviceScale);
+
+      scaleRatioX = physicalW / Math.max(1, stageWidth);
+      scaleRatioY = physicalH / Math.max(1, stageHeight);
+
+      // 设置舞台 CSS 尺寸
       stageContainer.style.width = stageWidth + 'px';
       stageContainer.style.height = stageHeight + 'px';
 
-      bgCanvas.width = stageWidth;
-      bgCanvas.height = stageHeight;
+      // Canvas 像素宽度设为物理高清像素，CSS 尺寸设为逻辑像素
+      bgCanvas.width = physicalW;
+      bgCanvas.height = physicalH;
       bgCanvas.style.width = stageWidth + 'px';
       bgCanvas.style.height = stageHeight + 'px';
 
-      annotCanvas.width = stageWidth;
-      annotCanvas.height = stageHeight;
+      annotCanvas.width = physicalW;
+      annotCanvas.height = physicalH;
       annotCanvas.style.width = stageWidth + 'px';
       annotCanvas.style.height = stageHeight + 'px';
 
-      // 1:1 离屏像素级采样缓冲
+      // 离屏物理采样缓冲 (用于马赛克与干净导出)
       sourceOffscreenCanvas = document.createElement('canvas');
-      sourceOffscreenCanvas.width = stageWidth;
-      sourceOffscreenCanvas.height = stageHeight;
+      sourceOffscreenCanvas.width = physicalW;
+      sourceOffscreenCanvas.height = physicalH;
       sourceOffscreenCtx = sourceOffscreenCanvas.getContext('2d');
-      sourceOffscreenCtx.drawImage(fullSnapshotImg, 0, 0, stageWidth, stageHeight);
+      sourceOffscreenCtx.drawImage(fullSnapshotImg, 0, 0, physicalW, physicalH);
 
-      // 绘制主背景图
-      bgCtx.drawImage(fullSnapshotImg, 0, 0, stageWidth, stageHeight);
+      // 绘制背景底图
+      bgCtx.drawImage(fullSnapshotImg, 0, 0, physicalW, physicalH);
 
-      // 显示尺寸胶囊
+      // 选区左上角尺寸标签
       sizeBadge.textContent = `${stageWidth} × ${stageHeight} px`;
 
-      // 调整工具栏位置：紧贴截图底部靠右
-      toolbarWrap.style.top = (stageHeight + 8) + 'px';
-      toolbarWrap.style.right = '0px';
+      // 智能定位悬浮工具栏 (保证永不超出版面、永不丢失)
+      updateToolbarPosition();
 
       clearAnnotations();
     };
     fullSnapshotImg.src = dataUrl;
+  }
+
+  // 暴露给主进程 IPC / executeJavaScript 调用
+  window.loadFromInitData = function (payload) {
+    initCaptureStage(payload);
   };
 
+  // 兜底：从本地临时文件读取 (彻底根治 executeJavaScript 异步时序竞争)
+  function tryAutoLoadFromDisk() {
+    if (isStageLoaded) return;
+    try {
+      const fs = require('fs');
+      const os = require('os');
+      const path = require('path');
+      const initFile = path.join(os.tmpdir(), 'rubick_capture_init.json');
+      if (fs.existsSync(initFile)) {
+        const text = fs.readFileSync(initFile, 'utf-8');
+        const payload = JSON.parse(text);
+        if (payload && payload.dataUrl) {
+          initCaptureStage(payload);
+        }
+      }
+    } catch (e) {
+      console.warn('tryAutoLoadFromDisk 异常:', e.message);
+    }
+  }
+
+  // DOM 就绪立即主动读盘尝试一次
+  window.addEventListener('DOMContentLoaded', () => {
+    tryAutoLoadFromDisk();
+  });
+  // 脚本载入立即也尝试一次
+  tryAutoLoadFromDisk();
+
   /**
-   * 4. 绘图管线与图元渲染
+   * 4. 智能排布悬浮工具栏 (1:1 对齐 Snipaste：下方空间不足时翻入图片内侧右下角)
+   */
+  function updateToolbarPosition() {
+    const tbHeight = subPalette.style.display === 'flex' ? 76 : 38;
+    const winH = window.innerHeight || (stageHeight + 90);
+
+    // 如果图片下方有足够空间放工具栏，停靠在图片外侧下方；
+    // 如果图片几乎占满窗口或在屏幕边缘，智能翻转停靠在截图内部右下角，确保 100% 可见！
+    if (winH - stageHeight >= tbHeight + 8) {
+      toolbarWrap.style.top = (stageHeight + 6) + 'px';
+      toolbarWrap.style.bottom = 'auto';
+    } else {
+      toolbarWrap.style.top = 'auto';
+      toolbarWrap.style.bottom = '10px';
+    }
+    toolbarWrap.style.right = '6px';
+  }
+
+  window.addEventListener('resize', () => {
+    updateToolbarPosition();
+  });
+
+  /**
+   * 5. 绘图管线与高清 Canvas 渲染
    */
   function applyStrokeStyles(ctx, item) {
     ctx.strokeStyle = item.color;
@@ -166,6 +241,7 @@
     redrawAnnotations();
 
     annotCtx.save();
+    annotCtx.scale(scaleRatioX, scaleRatioY);
     annotCtx.beginPath();
     annotCtx.rect(0, 0, stageWidth, stageHeight);
     annotCtx.clip();
@@ -253,9 +329,10 @@
   }
 
   function redrawAnnotations() {
-    annotCtx.clearRect(0, 0, stageWidth, stageHeight);
+    annotCtx.clearRect(0, 0, physicalW, physicalH);
 
     annotCtx.save();
+    annotCtx.scale(scaleRatioX, scaleRatioY);
     annotCtx.beginPath();
     annotCtx.rect(0, 0, stageWidth, stageHeight);
     annotCtx.clip();
@@ -313,7 +390,7 @@
     redoHistory = [];
     recordedBoxes = [];
     recordedTextNotes = [];
-    annotCtx.clearRect(0, 0, stageWidth, stageHeight);
+    annotCtx.clearRect(0, 0, physicalW, physicalH);
   }
 
   function drawArrow(ctx, x1, y1, x2, y2, size, style = 'single') {
@@ -360,7 +437,7 @@
   }
 
   /**
-   * 5. 马赛克 (Pixelate) 算法：精准采样，彻底防越界
+   * 6. 马赛克 (Pixelate) 算法：精准采样，彻底防越界与异常
    */
   function drawMosaic(ctx, mx, my, mw, mh, radius = 8) {
     mx = Math.round(mx);
@@ -375,14 +452,20 @@
     if (safeW <= 0 || safeH <= 0) return;
 
     try {
-      const imgData = sourceOffscreenCtx.getImageData(mx, my, safeW, safeH);
+      const pMx = Math.round(mx * scaleRatioX);
+      const pMy = Math.round(my * scaleRatioY);
+      const pMw = Math.round(safeW * scaleRatioX);
+      const pMh = Math.round(safeH * scaleRatioY);
+      if (pMw <= 0 || pMh <= 0) return;
+
+      const imgData = sourceOffscreenCtx.getImageData(pMx, pMy, pMw, pMh);
       const data = imgData.data;
 
       for (let y = 0; y < safeH; y += blockSize) {
         for (let x = 0; x < safeW; x += blockSize) {
-          const px = Math.min(x, safeW - 1);
-          const py = Math.min(y, safeH - 1);
-          const pIndex = (py * safeW + px) * 4;
+          const samplePx = Math.min(Math.floor(x * scaleRatioX), pMw - 1);
+          const samplePy = Math.min(Math.floor(y * scaleRatioY), pMh - 1);
+          const pIndex = (samplePy * pMw + samplePx) * 4;
           const r = data[pIndex];
           const g = data[pIndex + 1];
           const b = data[pIndex + 2];
@@ -396,7 +479,7 @@
   }
 
   /**
-   * 6. 高斯模糊 (Smooth Blur) 算法
+   * 7. 高斯模糊 (Smooth Blur) 算法
    */
   function drawBlur(ctx, mx, my, mw, mh, radius = 8) {
     mx = Math.round(mx);
@@ -411,7 +494,7 @@
       ctx.rect(mx, my, mw, mh);
       ctx.clip();
       ctx.filter = `blur(${Math.max(2, Math.round(radius / 2))}px)`;
-      ctx.drawImage(bgCanvas, 0, 0, stageWidth, stageHeight);
+      ctx.drawImage(bgCanvas, 0, 0, physicalW, physicalH, 0, 0, stageWidth, stageHeight);
       ctx.restore();
     } catch (err) {
       console.error('drawBlur 执行异常:', err);
@@ -419,7 +502,7 @@
   }
 
   /**
-   * 7. 序号标记
+   * 8. 序号标记
    */
   function addNumberBadge(x, y) {
     annotHistory.push({
@@ -450,7 +533,7 @@
   }
 
   /**
-   * 8. 橡皮擦 (点选命中消除)
+   * 9. 橡皮擦 (点选命中消除)
    */
   function eraseAtPoint(x, y) {
     for (let i = annotHistory.length - 1; i >= 0; i--) {
@@ -477,7 +560,7 @@
   }
 
   /**
-   * 9. 文字输入标注与提交闭环
+   * 10. 文字输入标注与提交闭环
    */
   function activateTextInput(x, y) {
     commitTextInput();
@@ -522,7 +605,6 @@
     inlineTextInput.style.display = 'none';
   }
 
-  // 绑定一次输入框事件
   inlineTextInput.addEventListener('blur', () => {
     setTimeout(commitTextInput, 60);
   });
@@ -538,7 +620,7 @@
   });
 
   /**
-   * 10. 鼠标事件交互中心
+   * 11. 鼠标事件交互中心
    */
   stageContainer.addEventListener('mousedown', (e) => {
     if (e.button === 2) {
@@ -651,14 +733,14 @@
       toolBtns.forEach(b => b.classList.remove('active'));
       subPalette.style.display = 'none';
       stageContainer.style.cursor = 'move';
+      updateToolbarPosition();
       return;
     }
-    // 无工具且无动作时退出截图
     finishWithAction('cancel');
   }
 
   /**
-   * 11. 工具栏与属性栏控制
+   * 12. 工具栏与属性栏控制
    */
   toolBtns.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -666,7 +748,6 @@
       commitTextInput();
 
       if (activeTool === tool) {
-        // 复合按钮再点击切换子类型
         if (tool === 'rect') {
           activeTool = 'ellipse';
           btn.dataset.tool = 'ellipse';
@@ -700,8 +781,8 @@
       btn.classList.add('active');
       stageContainer.style.cursor = activeTool === 'eraser' ? 'cell' : 'crosshair';
 
-      // 展开二级属性栏
       showSubPaletteForTool(activeTool);
+      updateToolbarPosition();
     });
   });
 
@@ -845,24 +926,24 @@
   });
 
   /**
-   * 12. 产物导出与业务触发 (独家三图分离架构)
+   * 13. 产物导出与业务触发 (独家三图分离架构，物理分辨率无损导出)
    */
   function exportCaptureData() {
     commitTextInput();
-    if (!stageWidth || !stageHeight) return null;
+    if (!physicalW || !physicalH) return null;
 
     // 1. 干净底图 (Clean)
     const cleanCanvas = document.createElement('canvas');
-    cleanCanvas.width = stageWidth;
-    cleanCanvas.height = stageHeight;
+    cleanCanvas.width = physicalW;
+    cleanCanvas.height = physicalH;
     const cCtx = cleanCanvas.getContext('2d');
     cCtx.drawImage(bgCanvas, 0, 0);
     const cleanDataUrl = cleanCanvas.toDataURL('image/png');
 
     // 2. 带涂鸦的完整合成图 (Annotated)
     const annotCanvasMerged = document.createElement('canvas');
-    annotCanvasMerged.width = stageWidth;
-    annotCanvasMerged.height = stageHeight;
+    annotCanvasMerged.width = physicalW;
+    annotCanvasMerged.height = physicalH;
     const aCtx = annotCanvasMerged.getContext('2d');
     aCtx.drawImage(bgCanvas, 0, 0);
     aCtx.drawImage(annotCanvas, 0, 0);
