@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>截图与悬浮工具栏</title>
+  <title>截图与全能悬浮工具栏</title>
   <link rel="stylesheet" href="src/capture.css">
 </head>
 <body>
@@ -26,7 +26,7 @@
     <div class="handle handle-w" data-handle="w"></div>
 
     <!-- 尺寸徽章提示 -->
-    <div id="sizeBadge" class="size-badge">0 × 0</div>
+    <div id="sizeBadge" class="size-badge">0 × 0 px</div>
   </div>
 
   <!-- 像素放大镜与取色器 -->
@@ -38,54 +38,159 @@
         <span id="magHexText" class="hex-text">#000000</span>
       </div>
       <span id="magRgbText" class="rgb-text">RGB(0, 0, 0)</span>
-      <span class="mag-tip">按 C 复制色值 · 拖拽划选区</span>
+      <span class="mag-tip">按 C 复制色值 · 滚轮微调</span>
     </div>
   </div>
 
-  <!-- 悬浮工具栏容器 (跟随选区右下角定位) -->
+  <!-- 悬浮工具栏外层包裹 (跟随选区绝对定位) -->
   <div id="toolbarWrap" class="toolbar-wrap" style="display: none;">
-    <!-- 二级调色与线宽弹板 -->
+    <!-- 专业二级属性栏 (随工具动态自适应排布) -->
     <div id="subPalette" class="sub-palette" style="display: none;">
-      <div class="palette-colors">
-        <span class="color-dot active" data-color="#ef4444" style="background-color: #ef4444;" title="红"></span>
-        <span class="color-dot" data-color="#eab308" style="background-color: #eab308;" title="黄"></span>
-        <span class="color-dot" data-color="#3b82f6" style="background-color: #3b82f6;" title="蓝"></span>
-        <span class="color-dot" data-color="#10b981" style="background-color: #10b981;" title="绿"></span>
-        <span class="color-dot" data-color="#ffffff" style="background-color: #ffffff; border: 1px solid #cbd5e1;" title="白"></span>
-        <span class="color-dot" data-color="#1e293b" style="background-color: #1e293b;" title="黑"></span>
+      <!-- 1. 主参数胶囊 (当前笔宽/颗粒度，滚轮可快速调节) -->
+      <div id="subParamBadge" class="sub-param-badge" title="当前笔宽/大小 (支持在画布上滑动滚轮快速调节)">4px</div>
+
+      <!-- 2A. 形状专属选项：实心填充开关、虚线开关 -->
+      <div id="subShapeOptions" class="sub-section" style="display: none;">
+        <button id="btnToggleFill" type="button" class="sub-icon-btn" title="实心填充开关">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" id="fillIconInner" fill="none"/></svg>
+        </button>
+        <button id="btnToggleDash" type="button" class="sub-icon-btn" title="虚线 / 实线切换">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="7" y2="12"/><line x1="10" y1="12" x2="14" y2="12"/><line x1="17" y1="12" x2="21" y2="12"/></svg>
+        </button>
       </div>
-      <div class="palette-divider"></div>
-      <div class="palette-sizes">
-        <span class="size-dot size-sm" data-size="2" title="细"></span>
-        <span class="size-dot size-md active" data-size="4" title="中"></span>
-        <span class="size-dot size-lg" data-size="8" title="粗"></span>
+
+      <!-- 2B. 线条专属选项：箭头样式下拉/切换 -->
+      <div id="subLineOptions" class="sub-section" style="display: none;">
+        <button id="btnArrowStyle" type="button" class="sub-icon-btn sub-arrow-btn" title="切换箭头样式 (单向箭头 / 双向 / 直线)">
+          <span id="arrowStyleLabel" style="font-size: 11px;">单向 ↗</span>
+        </button>
+      </div>
+
+      <!-- 2C. 马赛克/模糊专属选项：模式切换 + 强度滑杆 -->
+      <div id="subMosaicOptions" class="sub-section" style="display: none;">
+        <button id="btnToggleBlurMode" type="button" class="sub-icon-btn" title="切换：马赛克格子 / 高斯模糊">
+          <span id="blurModeLabel" style="font-size: 11px; font-weight: 600;">马赛克</span>
+        </button>
+        <div class="slider-wrap">
+          <input id="rngMosaicSize" type="range" min="4" max="32" value="10" class="sub-slider">
+          <span id="valMosaicSize" class="slider-val">10</span>
+        </div>
+      </div>
+
+      <!-- 2D. 序号专属选项：递增重置 -->
+      <div id="subNumberOptions" class="sub-section" style="display: none;">
+        <button id="btnResetNumber" type="button" class="sub-icon-btn" title="重置序号为 ①">
+          <span style="font-size: 11px; font-weight: 600;">序号重置 ①</span>
+        </button>
+      </div>
+
+      <!-- 2E. 文字专属选项：粗体B、斜体I、背景遮罩A、字号 -->
+      <div id="subTextOptions" class="sub-section" style="display: none;">
+        <button id="btnTextBold" type="button" class="sub-icon-btn active" title="粗体 (Ctrl+B)"><b>B</b></button>
+        <button id="btnTextItalic" type="button" class="sub-icon-btn" title="斜体 (Ctrl+I)"><i>I</i></button>
+        <button id="btnTextBg" type="button" class="sub-icon-btn" title="文字底色遮罩开关">A</button>
+        <select id="selFontSize" class="sub-select" title="字号">
+          <option value="12">12px</option>
+          <option value="14">14px</option>
+          <option value="16" selected>16px</option>
+          <option value="18">18px</option>
+          <option value="22">22px</option>
+          <option value="28">28px</option>
+          <option value="36">36px</option>
+        </select>
+      </div>
+
+      <div class="palette-divider" id="paletteSep"></div>
+
+      <!-- 3. 主色块 (点击调用原生色板) -->
+      <div class="main-swatch-wrap" title="当前主颜色 (点击唤起高级拾色器)">
+        <span id="currentSwatch" class="main-swatch" style="background-color: #ef4444;"></span>
+        <input id="nativeColorPicker" type="color" value="#ef4444" class="native-color-input">
+      </div>
+
+      <!-- 4. Snipaste 经典 20 色双行预设调色板 -->
+      <div class="palette-20-grid">
+        <!-- 第 1 行 10 色 -->
+        <span class="pal-dot" data-color="#ef4444" style="background:#ef4444;" title="红"></span>
+        <span class="pal-dot" data-color="#f97316" style="background:#f97316;" title="橙"></span>
+        <span class="pal-dot" data-color="#facc15" style="background:#facc15;" title="黄"></span>
+        <span class="pal-dot" data-color="#22c55e" style="background:#22c55e;" title="绿"></span>
+        <span class="pal-dot" data-color="#06b6d4" style="background:#06b6d4;" title="青"></span>
+        <span class="pal-dot" data-color="#3b82f6" style="background:#3b82f6;" title="蓝"></span>
+        <span class="pal-dot" data-color="#8b5cf6" style="background:#8b5cf6;" title="紫"></span>
+        <span class="pal-dot" data-color="#ec4899" style="background:#ec4899;" title="粉"></span>
+        <span class="pal-dot pal-white" data-color="#ffffff" style="background:#ffffff;" title="白"></span>
+        <span class="pal-dot" data-color="#0f172a" style="background:#0f172a;" title="黑"></span>
+
+        <!-- 第 2 行 10 色 -->
+        <span class="pal-dot" data-color="#991b1b" style="background:#991b1b;" title="暗红"></span>
+        <span class="pal-dot" data-color="#c2410c" style="background:#c2410c;" title="深橙"></span>
+        <span class="pal-dot" data-color="#ca8a04" style="background:#ca8a04;" title="土黄"></span>
+        <span class="pal-dot" data-color="#15803d" style="background:#15803d;" title="深绿"></span>
+        <span class="pal-dot" data-color="#0e7490" style="background:#0e7490;" title="深青"></span>
+        <span class="pal-dot" data-color="#1d4ed8" style="background:#1d4ed8;" title="深蓝"></span>
+        <span class="pal-dot" data-color="#6d28d9" style="background:#6d28d9;" title="深紫"></span>
+        <span class="pal-dot" data-color="#be185d" style="background:#be185d;" title="深粉"></span>
+        <span class="pal-dot" data-color="#94a3b8" style="background:#94a3b8;" title="浅灰"></span>
+        <span class="pal-dot" data-color="#475569" style="background:#475569;" title="深灰"></span>
       </div>
     </div>
 
-    <!-- 主悬浮工具栏 -->
+    <!-- 主悬浮工具栏 (1:1 对齐 Snipaste 18 经典按钮顺序) -->
     <div id="floatingToolbar" class="floating-toolbar">
       <!-- 标注工具组 -->
       <div class="tool-btn-group">
-        <button id="toolRect" type="button" class="tool-btn" data-tool="rect" title="矩形框 (R)">
+        <!-- 矩形 / 椭圆 (复合按钮) -->
+        <button id="toolShape" type="button" class="tool-btn tool-btn-compound" data-tool="rect" title="矩形 / 椭圆 (R/E)">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          <span class="sub-arrow-indicator">▾</span>
         </button>
-        <button id="toolEllipse" type="button" class="tool-btn" data-tool="ellipse" title="椭圆形 (O)">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="12" rx="9" ry="9"/></svg>
-        </button>
-        <button id="toolArrow" type="button" class="tool-btn" data-tool="arrow" title="箭头标注 (A)">
+
+        <!-- 折线 / 箭头 (复合按钮) -->
+        <button id="toolLineArrow" type="button" class="tool-btn tool-btn-compound" data-tool="arrow" title="折线 / 箭头 (L/A)">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="19" x2="19" y2="5"/><polyline points="9 5 19 5 19 15"/></svg>
+          <span class="sub-arrow-indicator">▾</span>
         </button>
+
+        <!-- 画笔 -->
         <button id="toolBrush" type="button" class="tool-btn" data-tool="brush" title="画笔涂鸦 (B)">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
         </button>
-        <button id="toolMosaic" type="button" class="tool-btn" data-tool="mosaic" title="马赛克打码 (M)">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8"/><rect x="13" y="13" width="8" height="8"/><rect x="13" y="3" width="8" height="8" fill="currentColor"/><rect x="3" y="13" width="8" height="8" fill="currentColor"/></svg>
+
+        <!-- 记号笔 / 荧光笔 -->
+        <button id="toolMarker" type="button" class="tool-btn" data-tool="marker" title="记号笔 / 荧光高亮 (M)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2l4 4L7 17H3v-4L14 2z"/><line x1="3" y1="22" x2="21" y2="22"/></svg>
         </button>
-        <button id="toolText" type="button" class="tool-btn" data-tool="text" title="文字输入 (T)">
+
+        <!-- 马赛克 / 模糊 (复合按钮) -->
+        <button id="toolMosaic" type="button" class="tool-btn tool-btn-compound" data-tool="mosaic" title="马赛克 / 模糊 (K/G)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8"/><rect x="13" y="13" width="8" height="8"/><rect x="13" y="3" width="8" height="8" fill="currentColor"/><rect x="3" y="13" width="8" height="8" fill="currentColor"/></svg>
+          <span class="sub-arrow-indicator">▾</span>
+        </button>
+
+        <!-- 文字标注 -->
+        <button id="toolText" type="button" class="tool-btn" data-tool="text" title="文字标注 (T)；打字可作为改图指令">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="12" y1="4" x2="12" y2="20"/><line x1="9" y1="20" x2="15" y2="20"/></svg>
         </button>
-        <button id="btnUndo" type="button" class="tool-btn" title="撤销上一步标注 (Ctrl+Z)">
+
+        <!-- 序号标注 -->
+        <button id="toolNumber" type="button" class="tool-btn" data-tool="number" title="序号标注 (N)：点击依次打上 ① ② ③ 标号">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><text x="12" y="16" text-anchor="middle" font-size="12" font-weight="bold" fill="currentColor" stroke="none">1</text></svg>
+        </button>
+
+        <!-- 橡皮擦 -->
+        <button id="toolEraser" type="button" class="tool-btn" data-tool="eraser" title="橡皮擦 (X / Del)：点击擦除标注对象">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20H7L3 16c-.8-.8-.8-2 0-2.8L13.8 2.4c.8-.8 2-.8 2.8 0L21 6.8c.8.8.8 2 0 2.8L12 18"/><line x1="7" y1="17" x2="17" y2="7"/></svg>
+        </button>
+
+        <div class="toolbar-divider"></div>
+
+        <!-- 撤销与重做 -->
+        <button id="btnUndo" type="button" class="tool-btn" title="撤销上一步 (Ctrl+Z)">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+        </button>
+        <button id="btnRedo" type="button" class="tool-btn" title="重做下一步 (Ctrl+Y)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></svg>
         </button>
       </div>
 
@@ -94,7 +199,7 @@
       <!-- 核心业务动作组 -->
       <div class="action-btn-group">
         <!-- AI 智能改图：多层精美星芒矢量图标 -->
-        <button id="actAiEdit" type="button" class="act-btn act-btn-ai" title="✨ AI 智能改图：自动分离原图与红框，送入画板无痕改字/局部重绘">
+        <button id="actAiEdit" type="button" class="act-btn act-btn-ai" title="✨ AI 智能改图：自动分离干净底图与视觉标注，送入画板无痕改字/重绘">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none">
             <path d="M12 2L14.4 8.6L21 11L14.4 13.4L12 20L9.6 13.4L3 11L9.6 8.6L12 2Z" fill="url(#aiSparkleGrad)"/>
             <path d="M19 16L20.2 19.3L23.5 20.5L20.2 21.7L19 25L17.8 21.7L14.5 20.5L17.8 19.3L19 16Z" fill="#a855f7" transform="scale(0.7) translate(7, -2)"/>
@@ -105,35 +210,39 @@
               </linearGradient>
             </defs>
           </svg>
-          <span class="btn-label">AI改图</span>
+          <span class="btn-label">✨改图</span>
         </button>
 
-        <button id="actOcr" type="button" class="act-btn" title="📄 文字提取与翻译：调用多模态大模型快速提取文字并流式翻译">
+        <!-- 文字识别与翻译 (OCR) -->
+        <button id="actOcr" type="button" class="act-btn act-btn-ocr" title="📄 文字提取与翻译：调用大模型并行提取文字并流式翻译">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-          <span class="btn-label">提取文字</span>
+          <span class="btn-label">OCR</span>
         </button>
 
-        <button id="actPin" type="button" class="act-btn" title="📌 钉在桌面：将选区直接变成透明置顶桌面贴图">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-2l-2-3V5a2 2 0 0 0-2-2h-6a2 2 0 0 0-2 2v7l-2 3v2z"/></svg>
-          <span class="btn-label">贴图</span>
-        </button>
-
-        <button id="actSave" type="button" class="act-btn" title="💾 保存截图到本地文件">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-        </button>
-
-        <button id="actCancel" type="button" class="act-btn act-btn-cancel" title="退出截屏 (Esc)">
+        <!-- 放弃截图 (Esc / 单击右键) -->
+        <button id="actCancel" type="button" class="act-btn act-btn-cancel" title="放弃截图 (Esc / 单击右键)">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
 
-        <button id="actConfirm" type="button" class="act-btn act-btn-confirm" title="复制截图并退出 (Enter / 双击选区)">
+        <!-- 钉在桌面上 / 贴图 (F3) -->
+        <button id="actPin" type="button" class="act-btn" title="钉在桌面上 / 置顶贴图 (F3)">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-2l-2-3V5a2 2 0 0 0-2-2h-6a2 2 0 0 0-2 2v7l-2 3v2z"/></svg>
+        </button>
+
+        <!-- 保存图片 (Ctrl+S) -->
+        <button id="actSave" type="button" class="act-btn" title="保存图片到本地文件 (Ctrl+S)">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        </button>
+
+        <!-- 复制到剪贴板 (Enter / 双击选区) -->
+        <button id="actConfirm" type="button" class="act-btn act-btn-confirm" title="复制到剪贴板 (Enter / 双击选区)">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
         </button>
       </div>
     </div>
   </div>
 
-  <!-- 行内文本输入框 (点文字标注时动态放置在选区内) -->
+  <!-- 行内文本输入框 -->
   <textarea id="inlineTextInput" class="inline-text-input" style="display: none;" rows="1"></textarea>
 
   <script src="src/capture.js"></script>

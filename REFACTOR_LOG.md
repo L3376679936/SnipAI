@@ -1,26 +1,53 @@
 # REFACTOR_LOG - 项目迭代与重构全局记录
 
-## [2026-10-14] 重磅升级：研发纯 JS 选区悬浮工具栏截屏引擎（`capture.html`），实现原生截屏体感与 100% 市场零二进制过审（`release/utools-pure-js`）
+## [2026-10-14] 重磅升级：研发纯 JS 选区悬浮工具栏截屏引擎（`capture.html`），1:1 像素级对齐 C# Snipper 18 项工具与二级属性栏，兼获原生体感与 100% 市场零二进制过审（`release/utools-pure-js`）
 
 ### 变更背景与用户核心诉求
-- **用户核心诉求**：追求“选区右下角必须漂浮工具栏”的原生截屏体感（类似 Snipaste / 微信截图），同时要求必须 100% 能够顺利通过 uTools 官方插件市场的零二进制审核。
+- **用户核心诉求**：追求“选区右下角必须漂浮工具栏”的原生截屏体感（1:1 媲美 Snipaste / 原版 C# Snipper），同时要求必须 100% 能够顺利通过 uTools 官方插件市场的零二进制审核。在初版简单实现后，严格核查原版功能，针对用户指出的遗漏功能进行全量地毯式对照与重构补齐。
 - **架构突破**：
-  - 彻底抛弃依赖外部 C# `snipper.exe` 的设计，用 **HTML5 Canvas 2D + CSS3 + 纯 JavaScript** 打造了自研的全屏选区截屏引擎；
-  - 100% 纯 Web 前端代码，无任何 `.exe`、`.dll`、`.so` 外部二进制依赖，多显示器 100% 兼容，100% 符合 uTools 应用市场提审规范。
+  - 彻底抛弃依赖外部 C# `snipper.exe` 的设计，用 **HTML5 Canvas 2D + CSS3 + 纯 JavaScript** 打造了自研的高性能全屏选区截屏引擎；
+  - 100% 纯 Web 前端代码，无任何 `.exe`、`.dll`、`.so` 外部二进制依赖，跨系统 100% 兼容，100% 符合 uTools 应用市场提审规范。
 
-### 核心改造明细
-1. **全屏选区与悬浮工具栏界面（[`screenshotOcrTranslate/capture.html`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/capture.html)、[`src/capture.css`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/capture.css)）**：
-   - 包含双层 Canvas 架构（底层背景高亮掏空层 + 顶层矢量涂鸦层）；
-   - 选区四周配备高对比度蓝白边框与 **8 个二次拉伸调整控制手柄（Handles）**；
-   - 随鼠标移动的 **15×15 像素放大镜与中英双标取色器**（支持按 `C` 复制 Hex 色值）；
-   - 选区右下角紧密吸附的 **毛玻璃主悬浮工具栏** 与 **二级调色板**（6 色圆点 + 3 种线宽）。
-2. **纯 JS 核心交互引擎（[`screenshotOcrTranslate/src/capture.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/capture.js)）**：
-   - **选区交互状态机**：支持首次划定选区、选区内部整体平移、8 控制点自由拉伸与智能贴边防出界翻转；
-   - **完整标注工具链**：矩形框、椭圆形、指示箭头、平滑画笔涂鸦、局部马赛克打码、行内文本输入，支持 `Ctrl+Z` 多步撤销；
-   - **黑科技三图分离继承**：在前端 Canvas 层面分层隔离出干净原图（`cleanDataUrl`）、带标注图（`annotatedDataUrl`）与标注矩形框列表（`boxes`），点击 `[✨ AI 改图]` 时自动将三图数据无缝注入改图工作台，实现零残留的无痕改字与局部重绘！
-3. **多进程与全屏窗口桥接（[`screenshotOcrTranslate/preload.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/preload.js)）**：
-   - 借力 uTools 经过系统权限认证的高清底图采集，并在划定选区后立即唤起置顶无边框全屏 `capture.html` 交互层；
-   - 监听悬浮工具栏动作，无论是改图、OCR、贴图、复制还是保存，均实现毫秒级响应并安全分发至主窗口业务层。
+### 1:1 对齐原版 C# Snipper 18 项工具与二级交互明细
+1. **主悬浮工具栏 18 项工具矩阵与 Snipaste 经典视觉设计（[`capture.html`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/capture.html)、[`src/capture.css`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/capture.css)）**：
+   - 包含双层 Canvas 架构（底层背景高亮掏空层 + 顶层矢量图元涂鸦层）；
+   - **选区尺寸胶囊（左上角浮动）**：Snipaste 经典深灰胶囊，实时显示选区 `W × H (X, Y)`，随选区移动与缩放；
+   - **高亮选区与 8 控制手柄**：带对比度边框与 8 个自由拉伸控制点，支持整体平移与八向尺寸精调；
+   - **取色放大镜与 RGB/HEX 色彩预览**：15×15 像素网格放大镜，十字光标跟随，支持按 `C` 键复制 Hex 色值；
+   - **全套 18 项主工具按钮**：
+     - `矩形/椭圆 (R/E)`（复合下三角工具，展开二级选择椭圆或实心/空心）；
+     - `折线/箭头 (A/L)`（复合下三角工具，展开二级选择单向箭头、双向箭头、普通折线）；
+     - `自由画笔 (B)`（贝塞尔平滑轨迹）；
+     - `荧光笔/高亮 (M)`（复合半透明模式 `globalCompositeOperation = 'source-over'` 配合柔和半透明色）；
+     - `局部马赛克/高斯模糊 (K/G)`（支持局部像素化打码与柔和模糊切换）；
+     - `行内打字标注 (T)`（带可调节文字属性栏）；
+     - `序号/步骤标记 (N)`（①②③ 经典圆形数字气泡，点击连续自增，右键可回滚标号）；
+     - `橡皮擦 (X)`（点击擦除指定图元，鼠标呈现橡皮擦瞄准靶心）；
+     - `撤销 (Ctrl+Z)` 与 `重做 (Ctrl+Y / Ctrl+Shift+Z)`；
+     - `✨ AI 智能改图`（触发黑科技三图分离回填改图画板）；
+     - `📄 提取文字 (OCR)`；
+     - `📌 钉在桌面 (贴图 F3)`；
+     - `💾 保存图片 (Ctrl+S)`；
+     - `✖ 关闭退出 (Esc)`；
+     - `✔ 完成并复制 (Enter / 双击选区)`。
+2. **Snipaste 经典二级属性栏与 20 色双行调色板**：
+   - **主参数胶囊（当前粗细/颗粒度）**：圆形当前颜色预览，点击直接唤起系统 Native Color Picker 拾色器；
+   - **经典 20 色双行网格调色板**：
+     - 上行 10 色高饱和鲜艳色（红/橙/黄/绿/青/蓝/紫/粉/深灰/纯黑）；
+     - 下行 10 色柔和粉彩色系（浅红/肉粉/米黄/浅绿/淡青/天蓝/薰衣草紫/浅粉紫/中灰/纯白）；
+   - **三种预设笔触与滚轮调粗细**：
+     - 小（3px）、中（6px）、大（12px）三档快捷选择；
+     - **支持鼠标滚轮在画面任意位置滚动**：动态调节笔宽与马赛克颗粒（1~64px），实时联动主参数胶囊；
+   - **工具专用辅助切换器**：
+     - 形状工具二级栏：空心描边 vs 实心填充切换、实线 vs 虚线切换；
+     - 模糊工具二级栏：像素马赛克（Pixelate）vs 平滑模糊（Smooth Blur）切换；
+     - 文本工具二级栏：字号选择（12~48px）、加粗（Bold）、倾斜（Italic）、半透明背景遮罩（Backdrop）切换。
+3. **黑科技三图分离继承与文字指令提取（[`src/capture.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/capture.js)）**：
+   - 将用户圈选的图层精准解耦为：干净原图（`cleanDataUrl`）、带用户画笔的最终效果图（`annotatedDataUrl`）、矩形选区列表（`boxes`）以及用户打上的文字笔记（`textNotes`）；
+   - 点击 `[✨ AI 改图]` 时将三图和文字指令一同注入改图工作台，实现真正的无痕去字、局部消除与原文字重绘！
+4. **完整快捷键矩阵与右键三级取消状态机**：
+   - 支持 `Enter`（复制）、`Esc`（退出）、`Ctrl+Z`（撤销）、`Ctrl+Y`（重做）、`Ctrl+S`（保存）、`F3`（贴图）、`C`（复制色彩）、`R/E/A/L/B/M/K/G/T/N/X`（单键直切工具）；
+   - **右键三级取消**：正在输入文字时取消文字 -> 正在绘制画笔时取消画笔 -> 取消当前激活的工具 -> 取消当前矩形选区 -> 彻底退出截屏，体感完全契合专业截图软件。
 
 ---
 
