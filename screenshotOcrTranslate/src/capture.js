@@ -195,16 +195,17 @@
    */
   function updateToolbarPosition() {
     const tbHeight = subPalette.style.display === 'flex' ? 76 : 38;
-    const winH = window.innerHeight || (stageHeight + 90);
+    const winH = window.innerHeight || (stageHeight + 100);
+    const stageBottom = stageHeight + 8; // 舞台加上 8px 发光上边距
 
-    if (winH - stageHeight >= tbHeight + 8) {
-      toolbarWrap.style.top = (stageHeight + 6) + 'px';
+    if (winH - stageBottom >= tbHeight + 12) {
+      toolbarWrap.style.top = (stageBottom + 6) + 'px';
       toolbarWrap.style.bottom = 'auto';
     } else {
       toolbarWrap.style.top = 'auto';
-      toolbarWrap.style.bottom = '10px';
+      toolbarWrap.style.bottom = '16px';
     }
-    toolbarWrap.style.right = '6px';
+    toolbarWrap.style.right = '8px';
   }
 
   window.addEventListener('resize', () => {

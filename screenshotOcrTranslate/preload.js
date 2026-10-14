@@ -179,15 +179,16 @@ window.nativeBridge = {
           const logicalW = Math.max(10, Math.round(physW / scale));
           const logicalH = Math.max(10, Math.round(physH / scale));
 
-          // 工具栏预留宽度与高度
-          const TOOLBAR_WIDTH = 530;
+          // 四周预留外发光微光缓冲边距 (8px)，确保 360 度微光柔和散开，不被窗口物理边缘截断
+          const GLOW_PAD = 8;
+          const TOOLBAR_WIDTH = 480;
           const TOOLBAR_HEIGHT = 86;
-          const winWidth = Math.max(logicalW, TOOLBAR_WIDTH);
-          const winHeight = logicalH + TOOLBAR_HEIGHT + 14;
+          const winWidth = Math.max(logicalW + GLOW_PAD * 2, TOOLBAR_WIDTH + GLOW_PAD * 2);
+          const winHeight = logicalH + TOOLBAR_HEIGHT + GLOW_PAD * 2 + 10;
 
-          // 按照用户截图终点（光标点）反推窗口左上角
-          let winX = point.x - logicalW;
-          let winY = point.y - logicalH;
+          // 按照用户截图终点（光标点）反推窗口左上角（抵消 8px 发光边距，确保截屏画面原位 1:1 精确覆盖）
+          let winX = point.x - logicalW - GLOW_PAD;
+          let winY = point.y - logicalH - GLOW_PAD;
 
           // 限制在当前显示器边界内，绝不跨屏跳跃到主屏
           const db = display.bounds || { x: 0, y: 0, width: 1920, height: 1080 };

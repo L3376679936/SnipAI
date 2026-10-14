@@ -17,11 +17,16 @@ html, body {
 /* 截图主舞台与画板 */
 .stage-container {
   position: absolute;
-  top: 0;
-  left: 0;
-  border: 1.5px solid #2563eb;
-  border-radius: 2px;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9), 0 4px 20px rgba(0, 0, 0, 0.4);
+  top: 8px;
+  left: 8px;
+  border: 1.5px solid #3b82f6;
+  border-radius: 3px;
+  /* 绝美微光发光效果：高对比内边线 + 亮蓝深浅双层光晕 + 浮空漫反射阴影 */
+  box-shadow: 
+    0 0 0 1px rgba(255, 255, 255, 0.9),
+    0 0 14px rgba(59, 130, 246, 0.55),
+    0 0 32px rgba(59, 130, 246, 0.25),
+    0 8px 28px rgba(0, 0, 0, 0.35);
   background-color: #000000;
   overflow: visible;
   z-index: 10;
@@ -327,22 +332,17 @@ html, body {
   background: linear-gradient(135deg, #f5f3ff 0%, #fdf4ff 100%);
   border-color: #ddd6fe;
   color: #7c3aed;
-  width: 52px;
-  gap: 3px;
-  padding: 0 4px;
 }
 
 .act-btn-ai:hover {
   background: linear-gradient(135deg, #ede9fe 0%, #fae8ff 100%);
   color: #6d28d9;
   border-color: #c4b5fd;
-  box-shadow: 0 2px 6px rgba(124, 58, 237, 0.2);
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.25);
 }
 
 .act-btn-ocr {
-  width: 42px;
   color: #1d4ed8;
-  gap: 2px;
   background: #eff6ff;
   border-color: #bfdbfe;
 }
