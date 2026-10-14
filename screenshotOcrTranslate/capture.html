@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>截图与悬浮工具栏</title>
+  <link rel="stylesheet" href="src/capture.css">
+</head>
+<body>
+  <!-- 底层全屏渲染画布与涂鸦层 -->
+  <div id="stageContainer" class="stage-container">
+    <canvas id="bgCanvas"></canvas>
+    <canvas id="annotCanvas"></canvas>
+  </div>
+
+  <!-- 选区遮罩与 8 控制点手柄 -->
+  <div id="selectionBox" class="selection-box" style="display: none;">
+    <!-- 8 控制点 -->
+    <div class="handle handle-nw" data-handle="nw"></div>
+    <div class="handle handle-n" data-handle="n"></div>
+    <div class="handle handle-ne" data-handle="ne"></div>
+    <div class="handle handle-e" data-handle="e"></div>
+    <div class="handle handle-se" data-handle="se"></div>
+    <div class="handle handle-s" data-handle="s"></div>
+    <div class="handle handle-sw" data-handle="sw"></div>
+    <div class="handle handle-w" data-handle="w"></div>
+
+    <!-- 尺寸徽章提示 -->
+    <div id="sizeBadge" class="size-badge">0 × 0</div>
+  </div>
+
+  <!-- 像素放大镜与取色器 -->
+  <div id="magnifier" class="magnifier-box" style="display: none;">
+    <canvas id="magCanvas" width="130" height="130"></canvas>
+    <div class="mag-meta">
+      <div class="mag-color-row">
+        <span id="magColorSample" class="color-sample"></span>
+        <span id="magHexText" class="hex-text">#000000</span>
+      </div>
+      <span id="magRgbText" class="rgb-text">RGB(0, 0, 0)</span>
+      <span class="mag-tip">按 C 复制色值 · 拖拽划选区</span>
+    </div>
+  </div>
+
+  <!-- 悬浮工具栏容器 (跟随选区右下角定位) -->
+  <div id="toolbarWrap" class="toolbar-wrap" style="display: none;">
+    <!-- 二级调色与线宽弹板 -->
+    <div id="subPalette" class="sub-palette" style="display: none;">
+      <div class="palette-colors">
+        <span class="color-dot active" data-color="#ef4444" style="background-color: #ef4444;" title="红"></span>
+        <span class="color-dot" data-color="#eab308" style="background-color: #eab308;" title="黄"></span>
+        <span class="color-dot" data-color="#3b82f6" style="background-color: #3b82f6;" title="蓝"></span>
+        <span class="color-dot" data-color="#10b981" style="background-color: #10b981;" title="绿"></span>
+        <span class="color-dot" data-color="#ffffff" style="background-color: #ffffff; border: 1px solid #cbd5e1;" title="白"></span>
+        <span class="color-dot" data-color="#1e293b" style="background-color: #1e293b;" title="黑"></span>
+      </div>
+      <div class="palette-divider"></div>
+      <div class="palette-sizes">
+        <span class="size-dot size-sm" data-size="2" title="细"></span>
+        <span class="size-dot size-md active" data-size="4" title="中"></span>
+        <span class="size-dot size-lg" data-size="8" title="粗"></span>
+      </div>
+    </div>
+
+    <!-- 主悬浮工具栏 -->
+    <div id="floatingToolbar" class="floating-toolbar">
+      <!-- 标注工具组 -->
+      <div class="tool-btn-group">
+        <button id="toolRect" type="button" class="tool-btn" data-tool="rect" title="矩形框 (R)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+        </button>
+        <button id="toolEllipse" type="button" class="tool-btn" data-tool="ellipse" title="椭圆形 (O)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="12" rx="9" ry="9"/></svg>
+        </button>
+        <button id="toolArrow" type="button" class="tool-btn" data-tool="arrow" title="箭头标注 (A)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="19" x2="19" y2="5"/><polyline points="9 5 19 5 19 15"/></svg>
+        </button>
+        <button id="toolBrush" type="button" class="tool-btn" data-tool="brush" title="画笔涂鸦 (B)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+        <button id="toolMosaic" type="button" class="tool-btn" data-tool="mosaic" title="马赛克打码 (M)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8"/><rect x="13" y="13" width="8" height="8"/><rect x="13" y="3" width="8" height="8" fill="currentColor"/><rect x="3" y="13" width="8" height="8" fill="currentColor"/></svg>
+        </button>
+        <button id="toolText" type="button" class="tool-btn" data-tool="text" title="文字输入 (T)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="12" y1="4" x2="12" y2="20"/><line x1="9" y1="20" x2="15" y2="20"/></svg>
+        </button>
+        <button id="btnUndo" type="button" class="tool-btn" title="撤销上一步标注 (Ctrl+Z)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+        </button>
+      </div>
+
+      <div class="toolbar-divider"></div>
+
+      <!-- 核心业务动作组 -->
+      <div class="action-btn-group">
+        <!-- AI 智能改图：多层精美星芒矢量图标 -->
+        <button id="actAiEdit" type="button" class="act-btn act-btn-ai" title="✨ AI 智能改图：自动分离原图与红框，送入画板无痕改字/局部重绘">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none">
+            <path d="M12 2L14.4 8.6L21 11L14.4 13.4L12 20L9.6 13.4L3 11L9.6 8.6L12 2Z" fill="url(#aiSparkleGrad)"/>
+            <path d="M19 16L20.2 19.3L23.5 20.5L20.2 21.7L19 25L17.8 21.7L14.5 20.5L17.8 19.3L19 16Z" fill="#a855f7" transform="scale(0.7) translate(7, -2)"/>
+            <defs>
+              <linearGradient id="aiSparkleGrad" x1="3" y1="2" x2="21" y2="20" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#8b5cf6"/>
+                <stop offset="1" stop-color="#ec4899"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <span class="btn-label">AI改图</span>
+        </button>
+
+        <button id="actOcr" type="button" class="act-btn" title="📄 文字提取与翻译：调用多模态大模型快速提取文字并流式翻译">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span class="btn-label">提取文字</span>
+        </button>
+
+        <button id="actPin" type="button" class="act-btn" title="📌 钉在桌面：将选区直接变成透明置顶桌面贴图">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-2l-2-3V5a2 2 0 0 0-2-2h-6a2 2 0 0 0-2 2v7l-2 3v2z"/></svg>
+          <span class="btn-label">贴图</span>
+        </button>
+
+        <button id="actSave" type="button" class="act-btn" title="💾 保存截图到本地文件">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        </button>
+
+        <button id="actCancel" type="button" class="act-btn act-btn-cancel" title="退出截屏 (Esc)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+
+        <button id="actConfirm" type="button" class="act-btn act-btn-confirm" title="复制截图并退出 (Enter / 双击选区)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 行内文本输入框 (点文字标注时动态放置在选区内) -->
+  <textarea id="inlineTextInput" class="inline-text-input" style="display: none;" rows="1"></textarea>
+
+  <script src="src/capture.js"></script>
+</body>
+</html>

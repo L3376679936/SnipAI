@@ -1,0 +1,330 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
+
+html, body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  cursor: crosshair;
+}
+
+.stage-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+#bgCanvas, #annotCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#annotCanvas {
+  pointer-events: none;
+}
+
+/* 选区外框与 8 个拉伸调整点 */
+.selection-box {
+  position: absolute;
+  border: 1px solid #3b82f6;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8), 0 4px 16px rgba(0, 0, 0, 0.25);
+  pointer-events: auto;
+  cursor: move;
+  z-index: 20;
+}
+
+.size-badge {
+  position: absolute;
+  top: -24px;
+  left: 0;
+  background-color: rgba(15, 23, 42, 0.85);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* 8 控制点手柄 */
+.handle {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  background-color: #ffffff;
+  border: 1.5px solid #2563eb;
+  border-radius: 1px;
+  pointer-events: auto;
+}
+
+.handle-nw { top: -4px; left: -4px; cursor: nw-resize; }
+.handle-n  { top: -4px; left: calc(50% - 3.5px); cursor: n-resize; }
+.handle-ne { top: -4px; right: -4px; cursor: ne-resize; }
+.handle-e  { top: calc(50% - 3.5px); right: -4px; cursor: e-resize; }
+.handle-se { bottom: -4px; right: -4px; cursor: se-resize; }
+.handle-s  { bottom: -4px; left: calc(50% - 3.5px); cursor: s-resize; }
+.handle-sw { bottom: -4px; left: -4px; cursor: sw-resize; }
+.handle-w  { top: calc(50% - 3.5px); left: -4px; cursor: w-resize; }
+
+/* 像素放大镜与取色器 */
+.magnifier-box {
+  position: absolute;
+  pointer-events: none;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background-color: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  width: 130px;
+}
+
+#magCanvas {
+  display: block;
+  background-color: #000000;
+}
+
+.mag-meta {
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mag-color-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.color-sample {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background-color: #000000;
+}
+
+.hex-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: #38bdf8;
+  font-family: monospace;
+}
+
+.rgb-text {
+  font-size: 10px;
+  color: #94a3b8;
+  font-family: monospace;
+}
+
+.mag-tip {
+  font-size: 9px;
+  color: #cbd5e1;
+  border-top: 1px dashed rgba(255, 255, 255, 0.15);
+  padding-top: 3px;
+  margin-top: 2px;
+}
+
+/* 悬浮工具栏外层包裹 (跟随选区绝对定位) */
+.toolbar-wrap {
+  position: absolute;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+/* 二级调色与线宽弹板 */
+.sub-palette {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.palette-colors, .palette-sizes {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.color-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+
+.color-dot:hover {
+  transform: scale(1.18);
+}
+
+.color-dot.active {
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 3.5px #3b82f6;
+  transform: scale(1.15);
+}
+
+.palette-divider {
+  width: 1px;
+  height: 14px;
+  background-color: #cbd5e1;
+  margin: 0 2px;
+}
+
+.size-dot {
+  background-color: #475569;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.12s, background-color 0.12s;
+}
+
+.size-sm { width: 5px; height: 5px; }
+.size-md { width: 8px; height: 8px; }
+.size-lg { width: 12px; height: 12px; }
+
+.size-dot:hover {
+  background-color: #1e293b;
+  transform: scale(1.2);
+}
+
+.size-dot.active {
+  background-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.3);
+}
+
+/* 主悬浮工具栏 */
+.floating-toolbar {
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(14px);
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  box-shadow: 0 10px 25px -4px rgba(0, 0, 0, 0.22), 0 4px 6px -2px rgba(0, 0, 0, 0.08);
+  padding: 3px 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.tool-btn-group, .action-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 18px;
+  background-color: #e2e8f0;
+  margin: 0 4px;
+}
+
+.tool-btn, .act-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 12px;
+  font-weight: 500;
+  gap: 4px;
+}
+
+.tool-btn:hover, .act-btn:hover {
+  background-color: #f1f5f9;
+  color: #0f172a;
+}
+
+.tool-btn.active {
+  background-color: #eff6ff;
+  color: #2563eb;
+  border-color: #bfdbfe;
+}
+
+/* 特色按钮高亮 */
+.act-btn-ai {
+  background: linear-gradient(135deg, #f5f3ff 0%, #fdf4ff 100%);
+  border-color: #ddd6fe;
+  color: #7c3aed;
+  font-weight: 600;
+  padding: 0 8px;
+}
+
+.act-btn-ai:hover {
+  background: linear-gradient(135deg, #ede9fe 0%, #fae8ff 100%);
+  border-color: #c4b5fd;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(124, 58, 237, 0.2);
+}
+
+.act-btn-confirm {
+  color: #16a34a;
+  background-color: #f0fdf4;
+  border-color: #bbf7d0;
+}
+.act-btn-confirm:hover {
+  background-color: #16a34a;
+  color: #ffffff;
+  border-color: #16a34a;
+}
+
+.act-btn-cancel {
+  color: #dc2626;
+}
+.act-btn-cancel:hover {
+  background-color: #fee2e2;
+  color: #b91c1c;
+}
+
+.btn-label {
+  font-size: 12px;
+}
+
+/* 行内文本输入框 */
+.inline-text-input {
+  position: absolute;
+  z-index: 35;
+  background: transparent;
+  border: 1px dashed #3b82f6;
+  outline: none;
+  color: #ef4444;
+  font-size: 16px;
+  font-weight: bold;
+  font-family: sans-serif;
+  padding: 2px 4px;
+  resize: none;
+  overflow: hidden;
+  line-height: 1.3;
+}

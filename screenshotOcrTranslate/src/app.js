@@ -887,8 +887,8 @@ const captureManager = new ScreenCaptureManager({
       return;
     }
 
-    // 2. 若显式意图为 OCR，直接启动大模型识别
-    if (intent === 'ocr') {
+    // 2. 若显式意图为 OCR，或在悬浮工具栏点击了【提取文字】，直接启动大模型识别
+    if (intent === 'ocr' || (res && res.action === 'ocr')) {
       switchWorkspaceMode('ocr');
       hideCaptureActionBar();
       showToast('正在识别提取文字并翻译...');

@@ -43,6 +43,18 @@ process.on('exit', () => {
 });
 
 logDebug(`Preload 初始化: __dirname=${__dirname}`);
+try {
+  const electron = require('electron');
+  const modKeys = Object.keys(electron);
+  logDebug(`Electron 模块清单: ${modKeys.join(', ')}`);
+  if (electron.desktopCapturer) {
+    logDebug(`desktopCapturer 存在: ${typeof electron.desktopCapturer.getSources}`);
+  } else {
+    logDebug('desktopCapturer 不在渲染进程');
+  }
+} catch (e) {
+  logDebug(`探测 Electron 失败: ${e.message}`);
+}
 
 /**
  * 宿主与底层能力桥接器 (纯内置自包含实现，无任何外部软件依赖)
@@ -113,50 +125,131 @@ window.nativeBridge = {
   },
 
   /**
-   * 唤起 uTools 官方原生全屏选区截屏 (纯 JS API 实现，零外部可执行二进制，100% 符合市场审核规范)
+   * 唤起纯 JS 全屏交互选区截屏与悬浮工具栏 (100% 纯 Web/Canvas 实现，零 EXE 外部依赖，完全符合市场审核)
    */
-  captureScreen: () => {
+  captureScreen: (options = {}) => {
     return new Promise((resolve, reject) => {
-      logDebug('captureScreen 被调用 (uTools 官方原生纯 JS 截屏通道)');
+      logDebug('captureScreen 被调用 (纯 JS 悬浮工具栏交互截屏通道)');
 
-      // 1. 优先调用 uTools 原生截屏 API
       if (window.utools && typeof window.utools.screenCapture === 'function') {
         window.nativeBridge.hideMainWindow();
-        window.utools.screenCapture((base64Str) => {
-          window.nativeBridge.showMainWindow();
-          window.nativeBridge.setHeight(600);
 
+        // 1. 采集屏幕选区底图
+        window.utools.screenCapture((base64Str) => {
           if (!base64Str) {
-            logDebug('用户取消了 uTools 截屏');
+            logDebug('用户取消了原生截屏');
+            window.nativeBridge.showMainWindow();
             reject(new Error('截图已取消'));
             return;
           }
 
           const dataUrl = base64Str.startsWith('data:') ? base64Str : `data:image/png;base64,${base64Str}`;
-          logDebug(`uTools 原生截屏成功，生成图片 DataURL (字符数: ${dataUrl.length})`);
+          logDebug(`屏幕采样成功 (数据大小: ${dataUrl.length})，立即唤起悬浮工具栏交互层`);
 
-          // 自动复制到剪贴板，方便用户在其他地方粘贴
+          // 2. 清理临时 IPC 结果文件
+          const CAPTURE_IPC_FILE = path.join(os.tmpdir(), 'rubick_capture_ipc_result.json');
+          try { if (fs.existsSync(CAPTURE_IPC_FILE)) fs.unlinkSync(CAPTURE_IPC_FILE); } catch (e) {}
+
+          // 3. 弹出全屏置顶透明截屏标注窗口 capture.html
+          let captureWin = null;
           try {
-            if (window.utools.copyImage) {
-              window.utools.copyImage(dataUrl);
-            }
-          } catch (e) {}
+            captureWin = window.utools.createBrowserWindow('capture.html', {
+              title: '截图标注与悬浮工具栏',
+              frame: false,
+              alwaysOnTop: true,
+              transparent: true,
+              fullscreen: true,
+              skipTaskbar: true,
+              resizable: false,
+              useContentSize: true
+            }, () => {
+              if (captureWin && captureWin.webContents) {
+                captureWin.webContents.executeJavaScript(`
+                  if (window.loadScreenSnapshot) {
+                    window.loadScreenSnapshot(${JSON.stringify(dataUrl)}, { isRegion: true });
+                  }
+                `);
+              }
+            });
+          } catch (winErr) {
+            logDebug(`创建 capture.html 失败: ${winErr.message}，降级回退`);
+            window.nativeBridge.showMainWindow();
+            resolve({
+              action: 'ready',
+              dataUrl: dataUrl,
+              bundle: {
+                cleanDataUrl: dataUrl,
+                annotatedDataUrl: dataUrl,
+                boxes: [],
+                hasMaskRegion: false,
+                timestamp: Date.now()
+              }
+            });
+            return;
+          }
 
-          const bundle = {
-            cleanDataUrl: dataUrl,
-            annotatedDataUrl: dataUrl,
-            maskDataUrl: null,
-            hasMaskRegion: false,
-            textNotes: [],
-            boxes: [],
-            timestamp: Date.now()
+          // 4. 处理截屏层返回的结果
+          let isHandled = false;
+          const onFinish = () => {
+            if (isHandled) return;
+            isHandled = true;
+
+            // 读取 IPC 结果
+            let result = null;
+            try {
+              if (fs.existsSync(CAPTURE_IPC_FILE)) {
+                const text = fs.readFileSync(CAPTURE_IPC_FILE, 'utf-8');
+                result = JSON.parse(text);
+              }
+            } catch (e) {}
+
+            window.nativeBridge.showMainWindow();
+            window.nativeBridge.setHeight(620);
+
+            if (result && result.action && result.action !== 'cancel') {
+              logDebug(`悬浮工具栏成功触发动作: ${result.action}`);
+              const exportData = result.data || {};
+              resolve({
+                action: result.action,
+                dataUrl: exportData.cleanDataUrl || dataUrl,
+                bundle: exportData.bundle || {
+                  cleanDataUrl: exportData.cleanDataUrl || dataUrl,
+                  annotatedDataUrl: exportData.annotatedDataUrl || dataUrl,
+                  boxes: exportData.bundle?.boxes || [],
+                  hasMaskRegion: (exportData.bundle?.boxes?.length || 0) > 0,
+                  timestamp: Date.now()
+                }
+              });
+            } else if (result && result.action === 'cancel') {
+              logDebug('用户在悬浮工具栏取消了截图');
+              reject(new Error('截图已取消'));
+            } else {
+              // 兜底直接返回截取的数据
+              resolve({
+                action: 'ready',
+                dataUrl: dataUrl,
+                bundle: {
+                  cleanDataUrl: dataUrl,
+                  annotatedDataUrl: dataUrl,
+                  boxes: [],
+                  hasMaskRegion: false,
+                  timestamp: Date.now()
+                }
+              });
+            }
           };
 
-          resolve({
-            action: 'ready',
-            dataUrl: dataUrl,
-            bundle: bundle
-          });
+          if (captureWin && typeof captureWin.on === 'function') {
+            captureWin.on('closed', onFinish);
+          } else {
+            const checkTimer = setInterval(() => {
+              if (fs.existsSync(CAPTURE_IPC_FILE)) {
+                clearInterval(checkTimer);
+                try { if (captureWin && captureWin.close) captureWin.close(); } catch (e) {}
+                onFinish();
+              }
+            }, 80);
+          }
         });
         return;
       }

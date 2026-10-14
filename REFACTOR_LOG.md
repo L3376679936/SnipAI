@@ -1,5 +1,29 @@
 # REFACTOR_LOG - 项目迭代与重构全局记录
 
+## [2026-10-14] 重磅升级：研发纯 JS 选区悬浮工具栏截屏引擎（`capture.html`），实现原生截屏体感与 100% 市场零二进制过审（`release/utools-pure-js`）
+
+### 变更背景与用户核心诉求
+- **用户核心诉求**：追求“选区右下角必须漂浮工具栏”的原生截屏体感（类似 Snipaste / 微信截图），同时要求必须 100% 能够顺利通过 uTools 官方插件市场的零二进制审核。
+- **架构突破**：
+  - 彻底抛弃依赖外部 C# `snipper.exe` 的设计，用 **HTML5 Canvas 2D + CSS3 + 纯 JavaScript** 打造了自研的全屏选区截屏引擎；
+  - 100% 纯 Web 前端代码，无任何 `.exe`、`.dll`、`.so` 外部二进制依赖，多显示器 100% 兼容，100% 符合 uTools 应用市场提审规范。
+
+### 核心改造明细
+1. **全屏选区与悬浮工具栏界面（[`screenshotOcrTranslate/capture.html`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/capture.html)、[`src/capture.css`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/capture.css)）**：
+   - 包含双层 Canvas 架构（底层背景高亮掏空层 + 顶层矢量涂鸦层）；
+   - 选区四周配备高对比度蓝白边框与 **8 个二次拉伸调整控制手柄（Handles）**；
+   - 随鼠标移动的 **15×15 像素放大镜与中英双标取色器**（支持按 `C` 复制 Hex 色值）；
+   - 选区右下角紧密吸附的 **毛玻璃主悬浮工具栏** 与 **二级调色板**（6 色圆点 + 3 种线宽）。
+2. **纯 JS 核心交互引擎（[`screenshotOcrTranslate/src/capture.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/capture.js)）**：
+   - **选区交互状态机**：支持首次划定选区、选区内部整体平移、8 控制点自由拉伸与智能贴边防出界翻转；
+   - **完整标注工具链**：矩形框、椭圆形、指示箭头、平滑画笔涂鸦、局部马赛克打码、行内文本输入，支持 `Ctrl+Z` 多步撤销；
+   - **黑科技三图分离继承**：在前端 Canvas 层面分层隔离出干净原图（`cleanDataUrl`）、带标注图（`annotatedDataUrl`）与标注矩形框列表（`boxes`），点击 `[✨ AI 改图]` 时自动将三图数据无缝注入改图工作台，实现零残留的无痕改字与局部重绘！
+3. **多进程与全屏窗口桥接（[`screenshotOcrTranslate/preload.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/preload.js)）**：
+   - 借力 uTools 经过系统权限认证的高清底图采集，并在划定选区后立即唤起置顶无边框全屏 `capture.html` 交互层；
+   - 监听悬浮工具栏动作，无论是改图、OCR、贴图、复制还是保存，均实现毫秒级响应并安全分发至主窗口业务层。
+
+---
+
 ## [2026-10-14] uTools 纯 JS 合规分支体验重构：解决截图后无工具栏直跳 OCR 痛点，重构截图动作工具栏与意图路由（`release/utools-pure-js`）
 
 ### 变更背景与用户核心痛点
