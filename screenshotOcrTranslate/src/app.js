@@ -22,9 +22,11 @@ class ScreenCaptureManager {
     this.onComplete = onComplete;
     this.onCancel = onCancel;
     this.isCapturing = false;
+    this.currentIntent = 'auto'; // 'auto' | 'ai_edit' | 'ocr'
   }
 
-  async startCapture() {
+  async startCapture(intent = 'auto') {
+    this.currentIntent = intent;
     if (this.isCapturing) {
       if (window.nativeBridge && window.nativeBridge.log) {
         window.nativeBridge.log('startCapture: 正在截图中，跳过重复请求');
@@ -36,12 +38,12 @@ class ScreenCaptureManager {
     try {
       if (window.nativeBridge && window.nativeBridge.captureScreen) {
         if (window.nativeBridge && window.nativeBridge.log) {
-          window.nativeBridge.log('调用 window.nativeBridge.captureScreen()');
+          window.nativeBridge.log(`调用 window.nativeBridge.captureScreen() [intent=${intent}]`);
         }
         const base64Data = await window.nativeBridge.captureScreen();
         this.isCapturing = false;
         if (this.onComplete) {
-          this.onComplete(base64Data);
+          this.onComplete(base64Data, this.currentIntent);
         }
       } else {
         throw new Error('当前环境未提供截图接口');
@@ -73,7 +75,8 @@ const DEFAULT_CONFIG = {
   imageEditApiKey: '',
   imageEditModel: 'Qwen/Qwen-Image-Edit',
   customOcrPrompt: '请仔细识别并提取这张图片中的所有文字。严格保持原有的段落排版和顺序。若含有代码或公式请完整保留。请直接输出提取出的文本内容，严禁输出任何问候语、说明、解释或附加符号。',
-  customTranslatePrompt: '你是一位精通多国语言的高级专业翻译官。请将输入的内容准确、地道、优雅地翻译成目标语言，语言通顺，语义精准，保持原有换行格式，直接输出译文，不要包含任何多余解释。'
+  customTranslatePrompt: '你是一位精通多国语言的高级专业翻译官。请将输入的内容准确、地道、优雅地翻译成目标语言，语言通顺，语义精准，保持原有换行格式，直接输出译文，不要包含任何多余解释。',
+  afterCaptureAction: 'toolbar' // 'toolbar' | 'ai_edit' | 'ocr'
 };
 
 const STORAGE_KEY = 'rubick_ai_ocr_settings_v1';
@@ -537,6 +540,23 @@ const thumbWrap = document.getElementById('thumbWrap');
 const thumbImg = document.getElementById('thumbImg');
 const emptyGuide = document.getElementById('emptyGuide');
 
+// 快捷操作工具栏与大预览卡片 DOM 元素
+const captureActionBar = document.getElementById('captureActionBar');
+const btnDismissAction = document.getElementById('btnDismissAction');
+const actAiEdit = document.getElementById('actAiEdit');
+const actOcr = document.getElementById('actOcr');
+const actPin = document.getElementById('actPin');
+const actCopy = document.getElementById('actCopy');
+const actSave = document.getElementById('actSave');
+const actionPreviewImg = document.getElementById('actionPreviewImg');
+const actionPreviewStage = document.getElementById('actionPreviewStage');
+
+// 缩略图迷你快捷操作按钮
+const btnThumbOcr = document.getElementById('btnThumbOcr');
+const btnThumbPin = document.getElementById('btnThumbPin');
+const btnThumbCopy = document.getElementById('btnThumbCopy');
+const btnThumbSave = document.getElementById('btnThumbSave');
+
 const settingsModal = document.getElementById('settingsModal');
 const btnCloseSettings = document.getElementById('btnCloseSettings');
 const btnCancelSettings = document.getElementById('btnCancelSettings');
@@ -553,6 +573,7 @@ const cfgBaseUrl = document.getElementById('cfgBaseUrl');
 const cfgApiKey = document.getElementById('cfgApiKey');
 const cfgVisionModel = document.getElementById('cfgVisionModel');
 const cfgTranslateModel = document.getElementById('cfgTranslateModel');
+const cfgAfterCaptureAction = document.getElementById('cfgAfterCaptureAction');
 const toastBar = document.getElementById('toastBar');
 
 let currentImageBase64 = null;
@@ -562,6 +583,26 @@ let isOcring = false;
 
 const imageLightbox = document.getElementById('imageLightbox');
 const lightboxImg = document.getElementById('lightboxImg');
+
+function showCaptureActionBar(dataUrl, bundle) {
+  if (!captureActionBar) return;
+  if (emptyGuide) emptyGuide.style.display = 'none';
+  if (thumbWrap) thumbWrap.style.display = 'none';
+  if (actionPreviewImg && dataUrl) actionPreviewImg.src = dataUrl;
+  captureActionBar.style.display = 'flex';
+  if (window.nativeBridge && window.nativeBridge.setHeight) {
+    window.nativeBridge.setHeight(620);
+  }
+}
+
+function hideCaptureActionBar() {
+  if (captureActionBar) captureActionBar.style.display = 'none';
+  if (currentImageBase64 || rawImageBase64) {
+    if (thumbWrap) thumbWrap.style.display = 'flex';
+  } else {
+    if (emptyGuide) emptyGuide.style.display = 'flex';
+  }
+}
 
 function showToast(msg, duration = 2000) {
   toastBar.textContent = msg;
@@ -797,14 +838,21 @@ function resolveAvailableBundle(fallbackDataUrl) {
 }
 
 const captureManager = new ScreenCaptureManager({
-  onComplete: (res) => {
+  onComplete: (res, intent = 'auto') => {
     hasAutoTriggeredCapture = true;
+    const base64Data = (res && res.dataUrl) ? res.dataUrl : (typeof res === 'string' ? res : null);
+    if (!base64Data) return;
+
     if (res && res.bundle && res.bundle.cleanDataUrl) {
       latestCaptureBundle = res.bundle;
+    } else {
+      latestCaptureBundle = resolveAvailableBundle(base64Data);
     }
 
-    // 贴图：截图已被钉在桌面上，snipper.exe 已自行退出；但主窗口此刻仍是隐藏的，
-    // 必须主动恢复，否则用户看到的就是"点完贴图插件不见了"。
+    rawImageBase64 = (latestCaptureBundle && latestCaptureBundle.cleanDataUrl) ? latestCaptureBundle.cleanDataUrl : base64Data;
+    currentImageBase64 = rawImageBase64;
+
+    // 贴图操作
     if (res && res.action === 'pin') {
       if (window.nativeBridge && window.nativeBridge.showMainWindow) {
         window.nativeBridge.showMainWindow();
@@ -813,54 +861,198 @@ const captureManager = new ScreenCaptureManager({
       return;
     }
 
-    // 若用户按 C 取色，颜色值已复制到剪贴板
+    // 取色操作
     if (res && res.action === 'copy_color') {
       showToast(`✓ 已取色并复制到剪贴板: ${res.color || ''}`);
       return;
     }
 
-    // 若用户在截图工具栏点击了【✦改图】按钮，或当前本来就处在「AI 智能改图」工作台下完成了截图(✔/Enter)
-    if (res && (res.action === 'ai_edit' || (res.action === 'copy' && activeWorkspaceMode === 'ai_edit'))) {
-      if (window.nativeBridge) {
-        if (window.nativeBridge.showMainWindow) window.nativeBridge.showMainWindow();
-        if (window.nativeBridge.setHeight) window.nativeBridge.setHeight(600);
-      }
-      const bundle = res.bundle || resolveAvailableBundle(res.dataUrl);
-      if (bundle && bundle.cleanDataUrl) {
-        rawImageBase64 = bundle.annotatedDataUrl || bundle.cleanDataUrl;
-        currentImageBase64 = bundle.cleanDataUrl;
-        if (emptyGuide) emptyGuide.style.display = 'none';
-        if (thumbWrap) thumbWrap.style.display = 'flex';
-        if (thumbImg) thumbImg.src = rawImageBase64;
-        switchWorkspaceMode('ai_edit');
-        aiEditController.loadBundle(bundle);
-        showToast('✨ 已自动跳转至 AI 改图工作台并填充截图');
-      }
-      return;
-    }
-
-    // 若用户在 OCR 模式下仅点击了【确定截图 ✔】或双击，仅复制到剪贴板，不触发 OCR
+    // 仅复制
     if (res && res.action === 'copy') {
       showToast('✓ 截图已复制到系统剪贴板');
       return;
     }
 
-    // 若用户点击了专门的【识别文字】按钮，启动 OCR
-    const base64Data = (res && res.dataUrl) ? res.dataUrl : (typeof res === 'string' ? res : null);
-    if (base64Data) {
-      if (window.nativeBridge) {
-        if (window.nativeBridge.showMainWindow) window.nativeBridge.showMainWindow();
-        if (window.nativeBridge.setHeight) window.nativeBridge.setHeight(600);
-      }
+    if (window.nativeBridge) {
+      if (window.nativeBridge.showMainWindow) window.nativeBridge.showMainWindow();
+      if (window.nativeBridge.setHeight) window.nativeBridge.setHeight(620);
+    }
+
+    // 1. 若显式意图为 AI 改图，或当前本来就在 AI 改图工作台，直接载入画板
+    if (intent === 'ai_edit' || activeWorkspaceMode === 'ai_edit' || (res && res.action === 'ai_edit')) {
+      switchWorkspaceMode('ai_edit');
+      const b = latestCaptureBundle || { cleanDataUrl: base64Data, annotatedDataUrl: base64Data };
+      aiEditController.loadBundle(b);
+      showToast('✨ 已将截图载入 AI 智能改图画板，直接框选即可修改');
+      return;
+    }
+
+    // 2. 若显式意图为 OCR，直接启动大模型识别
+    if (intent === 'ocr') {
       switchWorkspaceMode('ocr');
+      hideCaptureActionBar();
       showToast('正在识别提取文字并翻译...');
       handleNewImage(base64Data);
+      return;
     }
+
+    // 3. 通用截图 (intent === 'auto')：根据用户偏好设置执行
+    const cfg = configManager.get();
+    const defaultAction = cfg.afterCaptureAction || 'toolbar';
+
+    if (defaultAction === 'ai_edit') {
+      switchWorkspaceMode('ai_edit');
+      const b = latestCaptureBundle || { cleanDataUrl: base64Data, annotatedDataUrl: base64Data };
+      aiEditController.loadBundle(b);
+      showToast('✨ 已自动载入 AI 智能改图工作台');
+      return;
+    }
+
+    if (defaultAction === 'ocr') {
+      switchWorkspaceMode('ocr');
+      hideCaptureActionBar();
+      showToast('正在识别提取文字并翻译...');
+      handleNewImage(base64Data);
+      return;
+    }
+
+    // 默认行为：展示快捷操作工具栏与大图预览卡片，等待用户自主点选
+    switchWorkspaceMode('ocr');
+    showCaptureActionBar(base64Data, latestCaptureBundle);
+    showToast('📸 截图已就绪，请在上方工具栏选择操作');
   },
   onCancel: () => {
     showToast('截图已取消');
   }
 });
+
+// 绑定快捷工具栏按钮事件
+if (btnDismissAction) {
+  btnDismissAction.addEventListener('click', () => {
+    hideCaptureActionBar();
+  });
+}
+
+if (actAiEdit) {
+  actAiEdit.addEventListener('click', () => {
+    hideCaptureActionBar();
+    switchWorkspaceMode('ai_edit');
+    const b = latestCaptureBundle || resolveAvailableBundle(rawImageBase64);
+    if (b && b.cleanDataUrl) {
+      aiEditController.loadBundle(b);
+    } else if (rawImageBase64) {
+      aiEditController.loadSingleImage(rawImageBase64);
+    }
+    showToast('✨ 已进入 AI 智能改图工作台');
+  });
+}
+
+if (actOcr) {
+  actOcr.addEventListener('click', () => {
+    hideCaptureActionBar();
+    const imgUrl = rawImageBase64 || currentImageBase64;
+    if (imgUrl) {
+      handleNewImage(imgUrl);
+      showToast('正在识别提取文字并翻译...');
+    }
+  });
+}
+
+if (actPin) {
+  actPin.addEventListener('click', () => {
+    const imgUrl = rawImageBase64 || currentImageBase64;
+    if (!imgUrl) return;
+    if (window.nativeBridge && typeof window.nativeBridge.pinImageDataUrl === 'function') {
+      const ok = window.nativeBridge.pinImageDataUrl(imgUrl);
+      if (ok) {
+        showToast('✓ 已钉在桌面上作为置顶贴图 (双击或Esc关闭)');
+        return;
+      }
+    }
+    showToast('当前环境不支持桌面贴图');
+  });
+}
+
+if (actCopy) {
+  actCopy.addEventListener('click', () => {
+    const imgUrl = rawImageBase64 || currentImageBase64;
+    if (!imgUrl) return;
+    if (window.nativeBridge && typeof window.nativeBridge.copyImageDataUrl === 'function') {
+      const ok = window.nativeBridge.copyImageDataUrl(imgUrl);
+      if (ok) {
+        showToast('✓ 截图已复制到系统剪贴板');
+        return;
+      }
+    }
+    showToast('复制图片失败');
+  });
+}
+
+if (actSave) {
+  actSave.addEventListener('click', () => {
+    const imgUrl = rawImageBase64 || currentImageBase64;
+    if (!imgUrl) return;
+    const a = document.createElement('a');
+    a.href = imgUrl;
+    a.download = `Screenshot_${Date.now()}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast('💾 已保存高清截图到本地');
+  });
+}
+
+if (actionPreviewStage) {
+  actionPreviewStage.addEventListener('click', () => {
+    const imgUrl = rawImageBase64 || currentImageBase64;
+    if (imgUrl && lightboxImg && imageLightbox) {
+      lightboxImg.src = imgUrl;
+      imageLightbox.classList.add('active');
+    }
+  });
+}
+
+// 绑定收起态缩略图中的迷你操作按钮
+if (btnThumbOcr) {
+  btnThumbOcr.addEventListener('click', () => {
+    const imgUrl = rawImageBase64 || currentImageBase64;
+    if (imgUrl) {
+      handleNewImage(imgUrl);
+      showToast('重新提取文字中...');
+    }
+  });
+}
+if (btnThumbPin) {
+  btnThumbPin.addEventListener('click', () => {
+    const imgUrl = rawImageBase64 || currentImageBase64;
+    if (imgUrl && window.nativeBridge && window.nativeBridge.pinImageDataUrl) {
+      window.nativeBridge.pinImageDataUrl(imgUrl);
+      showToast('✓ 已置顶贴图到桌面');
+    }
+  });
+}
+if (btnThumbCopy) {
+  btnThumbCopy.addEventListener('click', () => {
+    const imgUrl = rawImageBase64 || currentImageBase64;
+    if (imgUrl && window.nativeBridge && window.nativeBridge.copyImageDataUrl) {
+      window.nativeBridge.copyImageDataUrl(imgUrl);
+      showToast('✓ 截图已复制到剪贴板');
+    }
+  });
+}
+if (btnThumbSave) {
+  btnThumbSave.addEventListener('click', () => {
+    const imgUrl = rawImageBase64 || currentImageBase64;
+    if (!imgUrl) return;
+    const a = document.createElement('a');
+    a.href = imgUrl;
+    a.download = `Screenshot_${Date.now()}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast('💾 已保存截图到本地');
+  });
+}
 
 async function pasteImageFromClipboard() {
   try {
@@ -908,6 +1100,7 @@ function openSettings() {
   if (cfgImageEditProvider) cfgImageEditProvider.value = cfg.imageEditProvider || 'modelscope';
   if (cfgImageEditApiKey) cfgImageEditApiKey.value = cfg.imageEditApiKey || '';
   if (cfgImageEditModel) cfgImageEditModel.value = cfg.imageEditModel || 'Qwen/Qwen-Image-Edit';
+  if (cfgAfterCaptureAction) cfgAfterCaptureAction.value = cfg.afterCaptureAction || 'toolbar';
   testConnResult.textContent = '';
   settingsModal.classList.add('active');
 }
@@ -933,7 +1126,8 @@ function saveSettings() {
     translateModel: cfgTranslateModel.value.trim(),
     imageEditProvider: cfgImageEditProvider ? cfgImageEditProvider.value : 'modelscope',
     imageEditApiKey: imgEditKeyVal,
-    imageEditModel: cfgImageEditModel ? cfgImageEditModel.value.trim() : 'Qwen/Qwen-Image-Edit'
+    imageEditModel: cfgImageEditModel ? cfgImageEditModel.value.trim() : 'Qwen/Qwen-Image-Edit',
+    afterCaptureAction: cfgAfterCaptureAction ? cfgAfterCaptureAction.value : 'toolbar'
   });
 
   if (ok) {
@@ -1245,7 +1439,10 @@ document.querySelectorAll('.tag-btn').forEach((btn) => {
   });
 });
 
-btnCapture.addEventListener('click', () => captureManager.startCapture());
+btnCapture.addEventListener('click', () => {
+  const intent = activeWorkspaceMode === 'ai_edit' ? 'ai_edit' : 'auto';
+  captureManager.startCapture(intent);
+});
 btnPaste.addEventListener('click', () => pasteImageFromClipboard());
 btnHistory.addEventListener('click', openHistoryDrawer);
 btnCloseHistory.addEventListener('click', closeHistoryDrawer);
@@ -4628,24 +4825,31 @@ if (window.nativeBridge && window.nativeBridge.onPluginEnter) {
       window.nativeBridge.log(`app.js 收到 onPluginEnter 事件: ${JSON.stringify(action)}`);
     }
 
-    // 判断是否是由 "ocr截图" / "截图" / "截屏" 等独立关键词唤起直接截图
+    // 判断是否是由 "ocr截图" / "截图" / "截屏" / "截图改图" 等独立关键词唤起直接截图
     const isDirectCapture = action && (
       action.code === 'direct-capture' ||
       (typeof action.payload === 'string' && (
         action.payload === 'ocr截图' ||
         action.payload === '截图' ||
         action.payload === '截屏' ||
-        action.payload === '屏幕截图'
+        action.payload === '屏幕截图' ||
+        action.payload === '截图改图'
       ))
     );
 
     if (isDirectCapture) {
       hasAutoTriggeredCapture = true;
+      let intent = 'auto';
+      if (action.payload === '截图改图') {
+        intent = 'ai_edit';
+      } else if (action.payload === 'ocr截图') {
+        intent = 'ocr';
+      }
       if (window.nativeBridge && window.nativeBridge.log) {
-        window.nativeBridge.log('>>> 匹配到直接截图指令(direct-capture)，立即唤起截图 <<<');
+        window.nativeBridge.log(`>>> 匹配到直接截图指令(direct-capture, intent=${intent})，立即唤起截图 <<<`);
       }
       setTimeout(() => {
-        captureManager.startCapture();
+        captureManager.startCapture(intent);
       }, 60);
       return;
     }

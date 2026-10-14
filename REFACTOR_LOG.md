@@ -1,5 +1,37 @@
 # REFACTOR_LOG - 项目迭代与重构全局记录
 
+## [2026-10-14] uTools 纯 JS 合规分支体验重构：解决截图后无工具栏直跳 OCR 痛点，重构截图动作工具栏与意图路由（`release/utools-pure-js`）
+
+### 变更背景与用户核心痛点
+- **用户痛点**：在剔除 C# `snipper.exe` 升级为 uTools 原生截屏后，用户反馈：*“现在怎么选中区域截图后，工具栏不显示了？直接进文字识别了”*。
+- **根因定位**：
+  1. `preload.js` 中的 `captureScreen()` 原生截屏完成后硬编码返回了 `{ action: 'ocr', dataUrl }`；
+  2. `app.js` 的 `captureManager.onComplete` 接收到截图数据后，无条件执行了 `switchWorkspaceMode('ocr')` 与 `handleNewImage(base64Data)`，直接向后端发起大模型 OCR 与流式翻译请求，强行剥夺了用户进入「AI 智能改图」、置顶贴图或仅复制截图的权利，并擅自消耗 Token。
+
+### 核心改造明细
+1. **重构截图后交互体验与快捷动作工具栏（[`screenshotOcrTranslate/index.html`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/index.html)、[`src/style.css`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/style.css)）**：
+   - 在主界面新增 **`capture-action-card` 截图就绪快捷操作工具栏与居中大预览卡片**，截图完成后立即醒目呈现五大核心操作：
+     - `[✨ AI 智能改图]`：渐变高亮按钮，一键进入画板进行无痕改字、局部消除与创意重绘；
+     - `[📄 提取文字 & 翻译]`：大模型 OCR 与流式双语对照入口（用户明确点击才发起网络请求）；
+     - `[📌 钉在桌面]`：调用纯 Web 置顶贴图窗口（支持拖拽/滚轮缩放/双击Esc关闭）；
+     - `[⧉ 复制图片]`：写入系统剪贴板；
+     - `[💾 保存到本地]`：下载保存为高清 PNG 图片。
+   - 增强收起态缩略图栏（`thumbWrap`）：在 OCR 完成后或切换文本视图时，提供迷你快捷操作按钮组，随时可一键送去改图、贴图或保存。
+2. **多维意图精准路由引擎（[`screenshotOcrTranslate/src/app.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/app.js)）**：
+   - `ScreenCaptureManager` 扩展 `startCapture(intent = 'auto')`：
+     - 若用户在「✨ AI 智能改图」Tab 下截图，或通过 `截图改图` 指令唤醒：自动载入 AI 改图工作台画板；
+     - 若用户通过 `ocr截图` / `文字提取` / `文字识别` 唤醒：执行自动 OCR 识别与翻译；
+     - 若为普通全局截图（`截图` / `截屏` / `屏幕截图` / `direct-capture`）：默认进入截图就绪态，展示快捷操作工具栏，交由用户自主点选。
+3. **增加用户偏好配置项（[`openSettings` & `saveSettings` in `app.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/app.js)）**：
+   - 在 API 设置面板中加入「通用截图完成后的默认动作」：
+     - 🌟 展示操作工具栏（自主选择改字、重绘、OCR或贴图，推荐）—— **默认**
+     - ✨ 直接进入 AI 智能改图画板（适合高频修图与局部重绘）
+     - 📄 直接提取文字并翻译（自动调用大模型 OCR 识别）
+4. **底层通信桥接合规解耦（[`screenshotOcrTranslate/preload.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/preload.js#L145-L165)）**：
+   - 将 `captureScreen` resolve 动作由硬编码的 `ocr` 解耦为 `ready`，彻底交由上层业务与用户意图决策。
+
+---
+
 ## [2026-10-14] 创建 uTools 市场审核合规分支（`release/utools-pure-js`）：彻底剔除二进制可执行文件，全面接入官方原生截屏 API
 
 ### 变更背景与架构分流策略

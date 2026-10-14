@@ -58,11 +58,75 @@
         </div>
       </div>
       <div class="panel-body">
-        <!-- 截取的图片缩略图 -->
+        <!-- 截取的图片缩略图 (收起态 / 识别完成态) -->
         <div id="thumbWrap" class="preview-thumb-wrap" style="display: none;">
           <img id="thumbImg" src="" alt="截图预览" class="thumb-img" title="点击查看大图">
-          <span class="thumb-meta">截图已加载，点击「重新截图」可重新圈选</span>
-          <button id="btnSendToAiEdit" type="button" class="btn btn-sm btn-ai-ghost" style="margin-left: auto; flex-shrink: 0;">✨ 送去改图</button>
+          <div class="thumb-info-col" style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="thumb-meta" style="font-size: 11px; color: var(--text-muted);">截图已加载</span>
+              <div class="thumb-action-mini-group" style="display: flex; gap: 4px;">
+                <button id="btnSendToAiEdit" type="button" class="btn btn-sm btn-ai-ghost" title="带去 AI 智能改图工作台">✨ 去改图</button>
+                <button id="btnThumbOcr" type="button" class="btn btn-sm" title="重新调用大模型识别提取文字与翻译">📄 提取文字</button>
+                <button id="btnThumbPin" type="button" class="btn btn-sm" title="置顶钉在桌面">📌 贴图</button>
+                <button id="btnThumbCopy" type="button" class="btn btn-sm" title="复制到系统剪贴板">⧉ 复制</button>
+                <button id="btnThumbSave" type="button" class="btn btn-sm" title="保存高清 PNG 到本地">💾 保存</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 截图完成后的快捷操作工具栏与大预览卡片 (刚截图完就绪态) -->
+        <div id="captureActionBar" class="capture-action-card" style="display: none;">
+          <div class="action-card-header">
+            <div class="action-title-row">
+              <span class="action-card-badge">📸 截图已就绪</span>
+              <span class="action-card-tip">请选择操作（未点击提取文字前不消耗 Token）：</span>
+            </div>
+            <button id="btnDismissAction" type="button" class="btn-close-action" title="收起工具卡片并进入文本编辑">✕</button>
+          </div>
+
+          <div class="action-button-grid">
+            <button id="actAiEdit" type="button" class="act-btn act-btn-ai" title="进入 AI 智能改图工作台：支持框选改字、智能消除与局部创意重绘">
+              <span class="act-icon">✨</span>
+              <div class="act-text-group">
+                <span class="act-name">AI 智能改图</span>
+                <span class="act-sub">无痕改字 / 局部重绘</span>
+              </div>
+            </button>
+            <button id="actOcr" type="button" class="act-btn act-btn-ocr" title="通过多模态大模型提取图中文字并进行流式双语翻译">
+              <span class="act-icon">📄</span>
+              <div class="act-text-group">
+                <span class="act-name">提取文字 & 翻译</span>
+                <span class="act-sub">大模型 OCR / 双语</span>
+              </div>
+            </button>
+            <button id="actPin" type="button" class="act-btn act-btn-pin" title="将截图置顶钉在桌面任意位置 (纯 Web 贴图，支持缩放/拖动)">
+              <span class="act-icon">📌</span>
+              <div class="act-text-group">
+                <span class="act-name">钉在桌面</span>
+                <span class="act-sub">透明置顶悬浮贴图</span>
+              </div>
+            </button>
+            <button id="actCopy" type="button" class="act-btn act-btn-copy" title="将截图完整复制到系统剪贴板">
+              <span class="act-icon">⧉</span>
+              <div class="act-text-group">
+                <span class="act-name">复制图片</span>
+                <span class="act-sub">写入系统剪贴板</span>
+              </div>
+            </button>
+            <button id="actSave" type="button" class="act-btn act-btn-save" title="保存高清 PNG 到本地文件">
+              <span class="act-icon">💾</span>
+              <div class="act-text-group">
+                <span class="act-name">保存图片</span>
+                <span class="act-sub">下载为高清 PNG</span>
+              </div>
+            </button>
+          </div>
+
+          <!-- 截图居中展示大舞台 -->
+          <div class="action-preview-stage" id="actionPreviewStage" title="点击查看原始高清大图">
+            <img id="actionPreviewImg" src="" alt="截图预览">
+          </div>
         </div>
 
         <!-- 空状态引导 -->
@@ -362,6 +426,15 @@
             <label class="form-label">极速翻译模型</label>
             <input id="cfgTranslateModel" type="text" class="form-input" placeholder="例如: qwen-turbo 或 deepseek-chat">
           </div>
+        </div>
+
+        <div class="form-group" style="margin-top: 6px;">
+          <label class="form-label">通用截图完成后的默认动作</label>
+          <select id="cfgAfterCaptureAction" class="form-input" style="padding: 6px 10px;">
+            <option value="toolbar" selected>🌟 展示操作工具栏（自主选择改字、重绘、OCR或贴图，推荐）</option>
+            <option value="ai_edit">✨ 直接进入 AI 智能改图画板（适合高频修图与局部重绘）</option>
+            <option value="ocr">📄 直接提取文字并翻译（自动调用大模型 OCR 识别）</option>
+          </select>
         </div>
 
         <!-- 新增：重绘级 AI 改图配置分区 -->

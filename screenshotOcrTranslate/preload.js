@@ -153,7 +153,7 @@ window.nativeBridge = {
           };
 
           resolve({
-            action: 'ocr',
+            action: 'ready',
             dataUrl: dataUrl,
             bundle: bundle
           });
