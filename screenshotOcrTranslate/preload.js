@@ -219,13 +219,17 @@ window.nativeBridge = {
           try {
             bridgeChannel = new BroadcastChannel('snipai_capture_channel');
             bridgeChannel.onmessage = (ev) => {
-              if (ev.data && ev.data.type === 'move_window') {
+              if (!ev.data) return;
+              if (ev.data.type === 'move_window') {
                 if (captureWin && !captureWin.isDestroyed()) {
                   try {
                     const [cx, cy] = captureWin.getPosition();
                     captureWin.setPosition(cx + ev.data.dx, cy + ev.data.dy);
                   } catch (e) {}
                 }
+              } else if (ev.data.type === 'finish') {
+                logDebug(`通过 BroadcastChannel 快速收到 finish: action=${ev.data.action}`);
+                onFinish(ev.data);
               }
             };
           } catch (chanErr) {
@@ -276,25 +280,38 @@ window.nativeBridge = {
             return;
           }
 
-          // 4. 处理截屏层返回的结果
+          // 4. 处理截屏层返回的结果与生命周期解绑
           let isHandled = false;
-          const onFinish = () => {
+          let checkTimer = null;
+
+          const onFinish = (explicitResult = null) => {
             if (isHandled) return;
             isHandled = true;
+
+            if (checkTimer) {
+              clearInterval(checkTimer);
+              checkTimer = null;
+            }
 
             if (bridgeChannel) {
               try { bridgeChannel.close(); } catch (e) {}
               bridgeChannel = null;
             }
 
+            if (captureWin && !captureWin.isDestroyed()) {
+              try { captureWin.close(); } catch (e) {}
+            }
+
             // 读取 IPC 结果
-            let result = null;
-            try {
-              if (fs.existsSync(CAPTURE_IPC_FILE)) {
-                const text = fs.readFileSync(CAPTURE_IPC_FILE, 'utf-8');
-                result = JSON.parse(text);
-              }
-            } catch (e) {}
+            let result = explicitResult;
+            if (!result) {
+              try {
+                if (fs.existsSync(CAPTURE_IPC_FILE)) {
+                  const text = fs.readFileSync(CAPTURE_IPC_FILE, 'utf-8');
+                  result = JSON.parse(text);
+                }
+              } catch (e) {}
+            }
 
             window.nativeBridge.showMainWindow();
             window.nativeBridge.setHeight(620);
@@ -332,17 +349,25 @@ window.nativeBridge = {
             }
           };
 
+          // 双保险：同时注册 closed 事件与高频轮询，杜绝 Promise 卡死导致无法再次截图
           if (captureWin && typeof captureWin.on === 'function') {
-            captureWin.on('closed', onFinish);
-          } else {
-            const checkTimer = setInterval(() => {
-              if (fs.existsSync(CAPTURE_IPC_FILE)) {
-                clearInterval(checkTimer);
-                try { if (captureWin && captureWin.close) captureWin.close(); } catch (e) {}
-                onFinish();
-              }
-            }, 80);
+            captureWin.on('closed', () => onFinish());
           }
+
+          checkTimer = setInterval(() => {
+            if (isHandled) {
+              clearInterval(checkTimer);
+              return;
+            }
+            if (fs.existsSync(CAPTURE_IPC_FILE)) {
+              onFinish();
+              return;
+            }
+            if (!captureWin || (captureWin.isDestroyed && captureWin.isDestroyed())) {
+              onFinish();
+              return;
+            }
+          }, 80);
         });
         return;
       }

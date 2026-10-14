@@ -162,6 +162,12 @@
      - `stage-container` 引入多层微光发光与漫反射阴影（`0 0 0 1px 高亮内描边` + `0 0 14px 亮蓝双层微光光晕` + `0 8px 28px 桌面浮空投影`），使截图宛如悬浮在桌面上的半透明玻璃透镜，边界感和立体感拉满，绝不与底屏混淆；
      - 工具栏排布自适应包含 8px 缓冲区的精确停靠。
 
+6. **截屏生命周期防死锁与强制唤醒机制（解决“现在都无法截图了”卡死 Bug）**：
+   - **根因定位**：子窗口通过 `window.close()` 退出时，uTools 部分环境下 `closed` 事件未被触发，导致主进程的 `captureScreen()` Promise 持续挂起，`ScreenCaptureManager.isCapturing` 状态位永久锁死，后续所有快捷键或点击截图均被判定为“正在截图中”而拦截；
+   - **BroadcastChannel 瞬时 finish 广播**：子窗口在 `finishWithAction` 中主动广播 `finish` 信号，主窗口接收后在 0ms 内即刻触发 `onFinish()` 并安全注销窗口；
+   - **双重定时器与窗口销毁轮询保底**：同时启动 80ms 轮询检测 `CAPTURE_IPC_FILE` 与 `captureWin.isDestroyed()`，任何单点故障均能自动恢复；
+   - **智能超时自愈与快捷键强制唤起**：`ScreenCaptureManager.startCapture` 增加 5 秒超时自愈，且 `onPluginEnter` 快捷键派发时传入 `force = true`，强制穿透死锁立即开启截图。
+
 ---
 
 

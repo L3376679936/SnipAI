@@ -25,15 +25,18 @@ class ScreenCaptureManager {
     this.currentIntent = 'auto'; // 'auto' | 'ai_edit' | 'ocr'
   }
 
-  async startCapture(intent = 'auto') {
+  async startCapture(intent = 'auto', force = false) {
     this.currentIntent = intent;
-    if (this.isCapturing) {
+    const now = Date.now();
+    // 如果距上次请求已超过 5 秒，或者显式 force 触发，强制打破死锁
+    if (this.isCapturing && !force && (now - (this.lastCaptureTime || 0) < 5000)) {
       if (window.nativeBridge && window.nativeBridge.log) {
         window.nativeBridge.log('startCapture: 正在截图中，跳过重复请求');
       }
       return;
     }
     this.isCapturing = true;
+    this.lastCaptureTime = now;
 
     try {
       if (window.nativeBridge && window.nativeBridge.captureScreen) {
@@ -4849,7 +4852,7 @@ if (window.nativeBridge && window.nativeBridge.onPluginEnter) {
         window.nativeBridge.log(`>>> 匹配到直接截图指令(direct-capture, intent=${intent})，立即唤起截图 <<<`);
       }
       setTimeout(() => {
-        captureManager.startCapture(intent);
+        captureManager.startCapture(intent, true);
       }, 60);
       return;
     }

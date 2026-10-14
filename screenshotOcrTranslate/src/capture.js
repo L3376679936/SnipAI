@@ -1018,7 +1018,20 @@
       }), 'utf-8');
     } catch (e) {}
 
-    window.close();
+    // 毫秒级直接通知父窗口，彻底解除 Promise 卡死与重复截图拒绝
+    if (bridgeChannel) {
+      try {
+        bridgeChannel.postMessage({
+          type: 'finish',
+          action: actionType,
+          data: data
+        });
+      } catch (e) {}
+    }
+
+    setTimeout(() => {
+      window.close();
+    }, 20);
   }
 
   // 按钮事件绑定
