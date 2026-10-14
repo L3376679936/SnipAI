@@ -4,3 +4,4 @@ dist/
 *.local
 # AI internal superpowers documentation
 docs/
+*.jpg

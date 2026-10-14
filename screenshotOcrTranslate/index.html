@@ -5,8 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>截图OCR与智能翻译</title>
   <link rel="stylesheet" href="src/style.css">
-  <!-- 引入 Snipaste 风格完整截图标注组件 -->
-  <script src="src/lib/screenShotPlugin.umd.js"></script>
 </head>
 <body>
   <!-- 顶部栏 -->
@@ -19,7 +17,11 @@
           <circle cx="12" cy="12" r="2.5" fill="#FFFFFF"/>
         </svg>
       </div>
-      <span class="brand-title">截图 OCR & 智能翻译</span>
+      <span class="brand-title">截图 OCR & AI 改图</span>
+      <div class="mode-tabs" role="tablist">
+        <button id="tabModeOcr" type="button" class="mode-tab active">📄 OCR 翻译</button>
+        <button id="tabModeAiEdit" type="button" class="mode-tab">✨ AI 智能改图</button>
+      </div>
     </div>
     <div class="header-actions">
       <button id="btnCapture" class="btn btn-primary">
@@ -41,8 +43,8 @@
     </div>
   </header>
 
-  <!-- 工作区双栏 -->
-  <main class="workspace">
+  <!-- 工作区一：OCR 识别与翻译双栏 -->
+  <main id="workspaceOcr" class="workspace">
     <!-- 左栏：原文与校对编辑区 -->
     <section class="panel-card">
       <div class="panel-header">
@@ -60,6 +62,7 @@
         <div id="thumbWrap" class="preview-thumb-wrap" style="display: none;">
           <img id="thumbImg" src="" alt="截图预览" class="thumb-img" title="点击查看大图">
           <span class="thumb-meta">截图已加载，点击「重新截图」可重新圈选</span>
+          <button id="btnSendToAiEdit" type="button" class="btn btn-sm btn-ai-ghost" style="margin-left: auto; flex-shrink: 0;">✨ 送去改图</button>
         </div>
 
         <!-- 空状态引导 -->
@@ -102,14 +105,224 @@
           </select>
         </div>
         <div class="header-actions">
+          <button id="btnToggleParallel" class="btn btn-sm" title="原文与译文逐段左右对照，右侧译文可直接编辑">逐段对照</button>
           <button id="btnCopyTranslation" class="btn btn-sm">复制译文</button>
         </div>
       </div>
       <div class="panel-body">
         <div id="translationView" class="translation-result"></div>
+        <!-- 逐段对照视图：左侧原文只读、右侧译文可直接编辑，与原纯译文视图二选一显示 -->
+        <div id="parallelView" class="parallel-view" style="display: none;"></div>
       </div>
       <div class="panel-footer">
-        <span id="transStatusTip" style="font-size: 11px; color: var(--text-muted);">就绪 · v1.3 (Snipaste文本与高清预览版)</span>
+        <span id="transStatusTip" style="font-size: 11px; color: var(--text-muted);">就绪 · v1.4 (Snipaste 标注重绘与双引擎改图版)</span>
+      </div>
+    </section>
+  </main>
+
+  <!-- 工作区二：✨ AI 智能改图（分级双引擎：轻量级改字/调色 + 重绘级局部重新设计） -->
+  <main id="workspaceAiEdit" class="workspace workspace-ai-edit" style="display: none;">
+    <!-- 左栏：分级引擎选择、修改指令与精细微调面板 -->
+    <section class="panel-card">
+      <div class="panel-header">
+        <div class="panel-title-group">
+          <span class="panel-title">✨ AI 改图控制台</span>
+          <span id="aiEditMaskBadge" class="badge">等待截图</span>
+        </div>
+        <div class="header-actions">
+          <button id="btnAddManualPatch" type="button" class="btn btn-sm" title="无需消耗 Token，直接在右侧图上拖拽框选即可无痕擦字并打上新字">➕ 手动框选改字</button>
+        </div>
+      </div>
+
+      <div class="panel-body ai-control-body">
+        <!-- 1. 截图标注缩略图与分离状态提示 -->
+        <div id="aiEditThumbBar" class="preview-thumb-wrap" style="display: none; margin-bottom: 8px;">
+          <img id="aiEditAnnotatedThumb" src="" alt="标注参考图" class="thumb-img" title="点击查看带标注的参考大图">
+          <div class="thumb-meta" style="flex: 1;">
+            <strong id="aiEditBundleTitle" style="color: var(--text-main); font-size: 12px;">已分离干净底图与视觉标注</strong>
+            <span id="aiEditBundleSub" style="font-size: 11px; color: var(--text-muted);">红框仅作位置引导，绝不会残留在生成图中</span>
+          </div>
+        </div>
+
+        <!-- 2. 分级双引擎模式切换器 -->
+        <div class="engine-tier-switch">
+          <div id="tierCardLight" class="tier-card active" data-tier="light">
+            <div class="tier-card-head">
+              <span class="tier-title">⚡ 轻量级 · 文字/细节微调</span>
+              <span class="tier-badge tier-badge--eco">极省 Token</span>
+            </div>
+            <p class="tier-desc">改文字、去小水印、调明暗色调。文字 100% 矢量锐利，生成后可滑块微调字号与位置</p>
+          </div>
+          <div id="tierCardHeavy" class="tier-card" data-tier="heavy">
+            <div class="tier-card-head">
+              <span class="tier-title">🎨 重绘级 · 局部重新设计</span>
+              <span class="tier-badge tier-badge--pro">生成式重绘</span>
+            </div>
+            <p class="tier-desc">重新设计圈选部位（图标/插画/背景替换），支持魔搭免费 API 与局部无损回贴</p>
+          </div>
+        </div>
+
+        <!-- 3A. 轻量级主面板：文字图层实时改字 (常驻显示，所见即所得，零 Token) -->
+        <div id="lightLayerTuner" class="tuner-box" style="display: flex;">
+          <div class="tuner-box-header">
+            <span style="font-size: 12px; font-weight: 600; color: #1e40af;">✏️ 框选文字实时替换 <span style="font-weight: normal; color: #64748b;">(在右图拖拽框选即改)</span></span>
+            <div style="display: flex; gap: 4px; align-items: center;">
+              <select id="selectActivePatch" class="lang-select" style="font-size: 11px; padding: 2px 6px;"></select>
+              <button id="btnDeletePatch" type="button" class="btn btn-sm" style="padding: 1px 6px; color: #ef4444;" title="删除当前选中的修改图层">删除</button>
+            </div>
+          </div>
+          <div class="tuner-grid">
+            <div class="tuner-row">
+              <label style="font-weight: 600; color: #1e40af;">替换文字</label>
+              <input id="tuneTextValue" type="text" class="form-input" style="padding: 5px 8px; font-size: 12px; flex: 1; border-color: #93c5fd;" placeholder="直接输入新文字实时生效（留空则仅擦除原字）">
+            </div>
+            <div class="tuner-row">
+              <label>排版填充</label>
+              <select id="tuneFillMode" class="lang-select" style="flex: 1; font-size: 12px; padding: 3px 6px;" title="当长字改短字（如10个字改4个字）产生留白，或短字改长字时，选择如何自适应排版">
+                <option value="reflow">🔗 后文自动平移拼接 (消除行内留白)</option>
+                <option value="spread">↔️ 字距均匀拉开铺满 (适合标题/按钮)</option>
+                <option value="scale">🔍 字号自动缩放铺满 (适合独立大字)</option>
+                <option value="left">📐 原位左对齐 (右侧自然留白)</option>
+                <option value="center">🎯 原位居中对齐</option>
+              </select>
+            </div>
+            <div class="tuner-row">
+              <label>字号 <span id="tuneFontSizeLabel">18</span>px</label>
+              <input id="tuneFontSize" type="range" min="8" max="96" value="18" style="flex: 1;">
+              <label style="display: inline-flex; align-items: center; gap: 3px; cursor: pointer;">
+                <input id="tuneFontBold" type="checkbox" checked> 粗体
+              </label>
+            </div>
+            <div class="tuner-row">
+              <label>文字色</label>
+              <input id="tuneFontColor" type="color" value="#1e293b" class="color-Mini">
+              <label style="margin-left: 6px;">底色</label>
+              <input id="tuneBgColor" type="color" value="#ffffff" class="color-Mini">
+              <label style="display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; cursor: pointer;" title="自动采样周围边缘像素平滑过渡擦除">
+                <input id="tuneSmartErase" type="checkbox" checked> 智能擦除底纹
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3B. 画面细节/色彩微调滑块 (轻量级常驻可用) -->
+        <div id="lightFilterBox" class="tuner-box">
+          <div class="tuner-box-header">
+            <span style="font-size: 12px; font-weight: 600; color: #334155;">🌈 画面效果细节微调</span>
+            <button id="btnResetFilters" type="button" class="tag-btn">重置参数</button>
+          </div>
+          <div class="filter-sliders-grid">
+            <div class="filter-item">
+              <span>亮度 <b id="valBrightness">100%</b></span>
+              <input id="rngBrightness" type="range" min="60" max="150" value="100">
+            </div>
+            <div class="filter-item">
+              <span>对比度 <b id="valContrast">100%</b></span>
+              <input id="rngContrast" type="range" min="60" max="160" value="100">
+            </div>
+            <div class="filter-item">
+              <span>饱和度 <b id="valSaturate">100%</b></span>
+              <input id="rngSaturate" type="range" min="0" max="180" value="100">
+            </div>
+            <div class="filter-item">
+              <span>色温 <b id="valWarmth">0</b></span>
+              <input id="rngWarmth" type="range" min="-40" max="40" value="0">
+            </div>
+          </div>
+        </div>
+
+        <!-- 3C. 轻量级可选折叠入口：免框选 AI 自然语言自动识图改字 -->
+        <div id="lightAiPromptToggleWrap" style="margin-top: 2px;">
+          <button id="btnToggleLightAiPrompt" type="button" class="tag-btn" style="width: 100%; justify-content: center; padding: 5px 8px; color: #475569; background: #f8fafc; border: 1px dashed #cbd5e1;">
+            🤖 不想手动框选？点击展开 AI 自然语言自动找字修改 ▾
+          </button>
+        </div>
+
+        <!-- 4A. AI 修改指令输入框（重绘级默认展示；轻量级默认隐藏，避免与上方「替换文字」重复） -->
+        <div id="aiPromptGroup" class="form-group" style="margin-top: 2px; display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label id="aiPromptLabel" class="form-label">🎨 局部重新设计 / 重绘指令 <span style="font-weight: normal; color: var(--text-muted);">(在右图框选任意区域后描述新设计)</span></label>
+          </div>
+          <textarea id="aiEditPromptInput" class="form-input ai-prompt-box" rows="3" placeholder="直接在右图拖拽框选想重新设计的部位（如图标、按钮、插画、背景、杂物），然后输入指令：&#10;例如：把框选部位重新设计成蓝色3D玻璃质感图标 / 把框选处的物体换成一杯咖啡..."></textarea>
+          <div class="preset-tags" id="aiPromptQuickTags">
+            <button type="button" class="tag-btn" data-prompt="把框选区域重新设计成精致的3D立体渲染风格，光影自然融合">🧊 3D立体化重绘</button>
+            <button type="button" class="tag-btn" data-prompt="把框选区域的界面元素重新设计得更具现代科技感与高级质感">✨ UI组件升级美化</button>
+            <button type="button" class="tag-btn" data-prompt="把框选区域内的主体替换为：">🪄 替换框内物体</button>
+            <button type="button" class="tag-btn" data-prompt="把框选区域内的杂物、水印或多余元素彻底无痕消除，自然补全背景纹理">🧹 无痕消除框内物体</button>
+            <button type="button" class="tag-btn" data-prompt="把框选区域重新绘制成精美的现代扁平插画风格">🎨 转插画/手绘风</button>
+          </div>
+        </div>
+
+        <!-- 4B. 重绘级专属：重绘选区管理与局部遮罩保护开关 -->
+        <div id="heavyOptionsBox" class="tuner-box" style="display: none; flex-direction: column; gap: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 6px; border-bottom: 1px dashed #cbd5e1;">
+            <span style="font-size: 12px; color: #4c1d95; font-weight: 600;">
+              🎯 重绘选区：<span id="heavyBoxStatusText" style="font-weight: normal; color: #6d28d9;">直接在右图拖拽即可框选局部</span>
+            </span>
+            <button id="btnClearHeavyBoxes" type="button" class="btn btn-sm" style="padding: 1px 7px; font-size: 11px; color: #dc2626;" title="清除已画的重绘框，重新框选或改为全图重绘">重选/清除框</button>
+          </div>
+          <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: #1e293b; cursor: pointer; line-height: 1.45;">
+            <input id="chkLockNonMask" type="checkbox" checked style="margin-top: 2px;">
+            <span>
+              <strong>🔒 仅重绘框选区域，100% 锁定其余画面（强烈推荐）</strong><br>
+              <span style="color: var(--text-muted); font-size: 11px;">将 AI 重新设计的局部通过边缘羽化蒙版无缝合成回原图，确保框选区域以外的文字和画面 100% 原画质零失真！</span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="panel-footer">
+        <span id="aiTokenCostTip" style="font-size: 11px; color: #059669; font-weight: 500;">⚡ 实时改字：在右图拖拽框选 ➡️ 输入替换文字即刻生效（零 Token）</span>
+        <button id="btnRunAiEdit" type="button" class="btn btn-ai-primary" style="display: none;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+          <span id="btnRunAiEditText">立即 AI 重绘</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- 右栏：交互式画布预览与对比交付区 -->
+    <section class="panel-card">
+      <div class="panel-header">
+        <div class="panel-title-group">
+          <span class="panel-title">改图效果预览</span>
+          <span id="aiEditStatusBadge" class="badge">就绪</span>
+        </div>
+        <div class="header-actions">
+          <button id="btnHoldCompare" type="button" class="btn btn-sm" title="按住鼠标不放查看修改前的干净原图">👁️ 按住对比原图</button>
+          <button id="btnUseAsBase" type="button" class="btn btn-sm" title="将当前画布效果固化为新一轮干净底图，继续叠加修改">🔄 以此图继续改</button>
+        </div>
+      </div>
+
+      <div class="panel-body ai-canvas-stage" id="aiCanvasStage">
+        <!-- 空状态引导 -->
+        <div id="aiEditEmptyGuide" class="empty-guide">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <path d="M12 8v8M8 12h8"/>
+          </svg>
+          <p>点击上方「重新截图」，用红框或 T 文字标注想修改的地方后点 <b>[✦改图]</b></p>
+        </div>
+
+        <!-- 核心渲染与交互画布 -->
+        <div id="aiCanvasWrap" class="ai-canvas-wrap" style="display: none;">
+          <canvas id="aiEditCanvas"></canvas>
+        </div>
+
+        <!-- 生成中加载遮罩 -->
+        <div id="aiEditLoadingOverlay" class="ai-loading-overlay" style="display: none;">
+          <div class="ai-spinner"></div>
+          <p id="aiEditLoadingText" style="font-size: 13px; font-weight: 500; color: #ffffff; margin-top: 10px;">AI 正在解析标注并生成修改效果...</p>
+        </div>
+      </div>
+
+      <div class="panel-footer">
+        <span id="aiEditFooterTip" style="font-size: 11px; color: var(--text-muted);">提示：直接在画布上按住左键拖拽即可框选要改的文字；拖动已改文字可微调位置</span>
+        <div style="display: flex; gap: 6px; align-items: center;">
+          <button id="btnAiSendOcr" type="button" class="btn btn-sm" title="将修改后的新图片送去提取文字并翻译">📄 转 OCR</button>
+          <button id="btnAiPin" type="button" class="btn btn-sm" title="将修改后的新图片直接钉在桌面上作为置顶贴图">📌 贴到桌面</button>
+          <button id="btnAiSave" type="button" class="btn btn-sm" title="保存修改后的高清 PNG 图片到本地">💾 保存</button>
+          <button id="btnAiCopy" type="button" class="btn btn-primary btn-sm" title="复制修改后的新图片到系统剪贴板">⧉ 复制新图</button>
+        </div>
       </div>
     </section>
   </main>
@@ -118,12 +331,12 @@
   <div id="settingsModal" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-header">
-        <h3 style="font-size: 15px; font-weight: 600;">大模型 API 配置</h3>
+        <h3 style="font-size: 15px; font-weight: 600;">大模型与 AI 改图 API 配置</h3>
         <button id="btnCloseSettings" class="btn btn-sm" style="border: none;">✕</button>
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label class="form-label">API Base URL (兼容 OpenAI 规范)</label>
+          <label class="form-label">API Base URL (兼容 OpenAI 规范 · 用于 OCR、翻译与轻量级改图)</label>
           <input id="cfgBaseUrl" type="text" class="form-input" placeholder="https://api.openai.com/v1">
           <div class="preset-tags">
             <span style="font-size: 11px; color: var(--text-muted); line-height: 20px;">常用快捷预设：</span>
@@ -135,23 +348,55 @@
         </div>
 
         <div class="form-group">
-          <label class="form-label">API Key</label>
+          <label class="form-label">主 API Key</label>
           <input id="cfgApiKey" type="password" class="form-input" placeholder="sk-...">
         </div>
 
-        <div class="form-group">
-          <label class="form-label">多模态 OCR 模型名称 (具备视觉能力的模型)</label>
-          <input id="cfgVisionModel" type="text" class="form-input" placeholder="例如: qwen-vl-max 或 gpt-4o-mini">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div class="form-group">
+            <label class="form-label">多模态视觉模型 (OCR & 轻量级改图)</label>
+            <input id="cfgVisionModel" type="text" class="form-input" placeholder="例如: qwen-vl-max">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">极速翻译模型</label>
+            <input id="cfgTranslateModel" type="text" class="form-input" placeholder="例如: qwen-turbo 或 deepseek-chat">
+          </div>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">翻译模型名称</label>
-          <input id="cfgTranslateModel" type="text" class="form-input" placeholder="例如: qwen-plus 或 deepseek-chat">
+        <!-- 新增：重绘级 AI 改图配置分区 -->
+        <div style="border-top: 1px dashed var(--border-color); padding-top: 12px; margin-top: 2px; display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 12px; font-weight: 600; color: #6d28d9;">🎨 重绘级（局部重新设计）模型渠道配置</span>
+            <span style="font-size: 11px; color: var(--text-muted);">轻量级改字无需此项</span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">重绘服务渠道</label>
+            <select id="cfgImageEditProvider" class="form-input" style="padding: 6px 10px;">
+              <option value="modelscope">🌟 魔搭社区免费 API (ModelScope - 推荐，支持 Qwen-Image-Edit)</option>
+              <option value="siliconflow">🚀 硅基流动免费生图 (SiliconFlow - 支持 deepseek-ai/Janus-Pro-7B)</option>
+              <option value="dashscope">☁️ 阿里云百炼生图 (DashScope - 直接复用上方百炼 Key)</option>
+              <option value="openai">🔌 通用 OpenAI 兼容生图接口 (/v1/images/generations)</option>
+            </select>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div class="form-group">
+              <label class="form-label">重绘专用 Token / Key (留空则复用主 Key)</label>
+              <input id="cfgImageEditApiKey" type="password" class="form-input" placeholder="魔搭 SDK Token 或 sk-...">
+            </div>
+            <div class="form-group">
+              <label class="form-label">重绘模型名称</label>
+              <input id="cfgImageEditModel" type="text" class="form-input" placeholder="Qwen/Qwen-Image-Edit">
+            </div>
+          </div>
         </div>
 
-        <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">
-          <button id="btnTestConn" type="button" class="btn btn-sm">🔗 测试 API 连通性</button>
-          <span id="testConnResult" style="font-size: 12px;"></span>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px;">
+          <button id="btnTestConn" type="button" class="btn btn-sm">🔗 测试主 API 连通性</button>
+          <button id="btnTestImageEditConn" type="button" class="btn btn-sm" style="color: #6d28d9; border-color: #ddd6fe; background: #f5f3ff;">🎨 测试重绘 Token 连通性</button>
+          <span id="testConnResult" style="font-size: 12px; flex: 1; min-width: 180px;"></span>
         </div>
       </div>
       <div class="modal-footer">

@@ -1,11 +1,12 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { clipboard } = require('electron');
+const { clipboard, nativeImage } = require('electron');
 const { execFile } = require('child_process');
 
 // 统一保存在用户主目录下的持久化配置文件，跨会话/跨重启永不丢失
 const CONFIG_FILE_PATH = path.join(os.homedir(), '.rubick_ocr_translate_config.json');
+const HISTORY_FILE_PATH = path.join(os.homedir(), '.rubick_ocr_translate_history.json');
 
 const LOG_FILE = path.join(os.homedir(), '.rubick_snipper_debug.log');
 function logDebug(msg) {
@@ -13,6 +14,34 @@ function logDebug(msg) {
     fs.appendFileSync(LOG_FILE, `[${new Date().toLocaleTimeString()}] ${msg}\n`);
   } catch (e) {}
 }
+
+// 历史记录的异步落盘状态（防抖窗口内只保留最后一份待写数据）
+let pendingHistory = null;
+let historySaveTimer = null;
+function flushHistoryToDisk() {
+  if (historySaveTimer) {
+    clearTimeout(historySaveTimer);
+    historySaveTimer = null;
+  }
+  if (pendingHistory === null) return;
+  const snapshot = pendingHistory;
+  pendingHistory = null;
+  try {
+    fs.writeFile(HISTORY_FILE_PATH, JSON.stringify(snapshot, null, 2), 'utf-8', (err) => {
+      if (err) logDebug(`写入历史记录失败: ${err.message}`);
+    });
+  } catch (err) {
+    logDebug(`写入历史记录失败: ${err.message}`);
+  }
+}
+// 渲染进程退出前同步刷盘：防抖窗口内若正好退出，异步写来不及完成会丢数据
+process.on('exit', () => {
+  if (historySaveTimer && pendingHistory !== null) {
+    try {
+      fs.writeFileSync(HISTORY_FILE_PATH, JSON.stringify(pendingHistory, null, 2), 'utf-8');
+    } catch (e) {}
+  }
+});
 
 logDebug(`Preload 初始化: __dirname=${__dirname}`);
 
@@ -52,11 +81,16 @@ window.nativeBridge = {
 
   /**
    * 持久化保存历史识别记录到本地磁盘 (最多保存 30 条)
+   *
+   * 历史里带 base64 截图，JSON 体积可达数 MB：原先的 writeFileSync 会在渲染进程
+   * 主线程上同步落盘，每次删除/新增都卡一次 UI。这里改为异步写 + 200ms 防抖，
+   * 连续操作只落一次盘；渲染进程退出时再同步兜底刷一次，避免丢最后一条。
    */
   saveHistory: (list) => {
     try {
-      const histPath = path.join(os.homedir(), '.rubick_ocr_translate_history.json');
-      fs.writeFileSync(histPath, JSON.stringify(list || [], null, 2), 'utf-8');
+      pendingHistory = list || [];
+      if (historySaveTimer) clearTimeout(historySaveTimer);
+      historySaveTimer = setTimeout(flushHistoryToDisk, 200);
       return true;
     } catch (err) {
       logDebug(`写入历史记录失败: ${err.message}`);
@@ -69,9 +103,8 @@ window.nativeBridge = {
    */
   loadHistory: () => {
     try {
-      const histPath = path.join(os.homedir(), '.rubick_ocr_translate_history.json');
-      if (fs.existsSync(histPath)) {
-        const text = fs.readFileSync(histPath, 'utf-8');
+      if (fs.existsSync(HISTORY_FILE_PATH)) {
+        const text = fs.readFileSync(HISTORY_FILE_PATH, 'utf-8');
         return JSON.parse(text);
       }
     } catch (err) {
@@ -100,8 +133,20 @@ window.nativeBridge = {
       }
       logDebug(`snipper.exe 路径: ${snipperExePath}, 存在: ${fs.existsSync(snipperExePath)}`);
 
+      // 两条路径都找不到时必须立即失败：否则下面会去执行一个不存在的文件，
+      // 只拿到一个 ENOENT 错误码，而主窗口已经隐藏、用户看不到任何反馈。
+      if (!fs.existsSync(snipperExePath)) {
+        logDebug('未找到 snipper.exe，放弃截图');
+        window.nativeBridge.showMainWindow();
+        reject(new Error('未找到截图程序 snipper.exe，请重新编译插件'));
+        return;
+      }
+
       // 3. 执行截图程序
-      execFile(snipperExePath, (err, stdout, stderr) => {
+      //    注意：这里刻意不设 timeout。用户选择「贴图」时 snipper.exe 会驻留运行
+      //    显示置顶窗口，直到用户主动关闭才退出；若加超时，超时一到就会把这个
+      //    窗口连同用户的贴图一起杀掉。子进程卡死的兜底交给下面 close 事件的异常分支。
+      execFile(snipperExePath, { windowsHide: true }, (err, stdout, stderr) => {
         const outStr = (stdout || '').trim();
         logDebug(`snipper.exe 退出: code=${err ? err.code : 0}, stdout=${outStr}`);
 
@@ -120,23 +165,106 @@ window.nativeBridge = {
           return;
         }
 
+        if (outStr.includes('ACTION:PIN')) {
+          logDebug('用户选择将截图钉在桌面上 (贴图)，已置顶展示并平稳退出');
+          resolve({ action: 'pin' });
+          return;
+        }
+
+        const readBundleFromFile = (filePath, deleteAfter = false) => {
+          try {
+            if (filePath && fs.existsSync(filePath)) {
+              const rawJson = fs.readFileSync(filePath, 'utf-8').replace(/^\uFEFF/, '').trim();
+              const parsed = JSON.parse(rawJson);
+              if (deleteAfter) {
+                try { fs.unlinkSync(filePath); } catch (e) {}
+              }
+              return parsed;
+            }
+          } catch (e) {
+            logDebug(`读取改图 JSON (${filePath}) 失败: ${e.message}`);
+          }
+          return null;
+        };
+
+        const latestBundlePath = path.join(os.tmpdir(), 'rubick_latest_capture_bundle.json');
+
+        const isAiEditAction = outStr.includes('ACTION:AI_EDIT:') || (err && err.code === 11);
+        if (isAiEditAction) {
+          logDebug('用户点击了【✨ 改图】按钮，恢复主窗口并进入 AI 智能改图模式');
+          window.nativeBridge.showMainWindow();
+          window.nativeBridge.setHeight(600);
+
+          let bundle = null;
+          if (outStr.includes('ACTION:AI_EDIT:')) {
+            const bundlePath = outStr.split('ACTION:AI_EDIT:')[1].split(/\r?\n/)[0].trim();
+            bundle = readBundleFromFile(bundlePath, true);
+          }
+          if (!bundle) {
+            bundle = readBundleFromFile(latestBundlePath, false);
+          }
+
+          if (bundle && bundle.cleanDataUrl) {
+            logDebug(`成功载入 AI 改图三图分离包: width=${bundle.width}, height=${bundle.height}, boxes=${(bundle.boxes || []).length}`);
+            resolve({
+              action: 'ai_edit',
+              dataUrl: bundle.annotatedDataUrl || bundle.cleanDataUrl,
+              bundle
+            });
+            return;
+          }
+
+          try {
+            const img = clipboard.readImage();
+            if (img && !img.isEmpty()) {
+              const fallbackUrl = img.toDataURL();
+              logDebug('通过剪贴板兜底载入待改图图片');
+              resolve({
+                action: 'ai_edit',
+                dataUrl: fallbackUrl,
+                bundle: {
+                  cleanDataUrl: fallbackUrl,
+                  annotatedDataUrl: fallbackUrl,
+                  maskDataUrl: null,
+                  hasMaskRegion: false,
+                  textNotes: [],
+                  boxes: []
+                }
+              });
+              return;
+            }
+          } catch (clipErr) {
+            logDebug(`读取剪贴板兜底异常: ${clipErr.message}`);
+          }
+
+          reject(new Error('未能读取到待修改的截图数据'));
+          return;
+        }
+
         const isOcrAction = outStr.includes('ACTION:OCR') || (err && err.code === 10);
         const isCopyOnly = outStr.includes('ACTION:COPY') || (!isOcrAction && !err);
 
         if (isCopyOnly) {
-          logDebug('用户仅选择确定截图 (✔)，图片已在剪贴板，不触发 OCR');
-          resolve({ action: 'copy' });
+          logDebug('用户仅选择确定截图 (✔)，图片已在剪贴板');
+          const latestBundle = readBundleFromFile(latestBundlePath, false);
+          resolve({ action: 'copy', bundle: latestBundle });
           return;
         }
 
         if (isOcrAction) {
           logDebug('用户点击了【识别文字】按钮，恢复主窗口并启动 OCR 翻译');
           window.nativeBridge.showMainWindow();
+          window.nativeBridge.setHeight(600);
+          const latestBundle = readBundleFromFile(latestBundlePath, false);
           try {
             const img = clipboard.readImage();
             if (img && !img.isEmpty()) {
               logDebug('成功从剪贴板读取到图片');
-              resolve({ action: 'ocr', dataUrl: img.toDataURL() });
+              resolve({ action: 'ocr', dataUrl: img.toDataURL(), bundle: latestBundle });
+              return;
+            }
+            if (latestBundle && latestBundle.annotatedDataUrl) {
+              resolve({ action: 'ocr', dataUrl: latestBundle.annotatedDataUrl, bundle: latestBundle });
               return;
             }
             reject(new Error('未在剪贴板中检测到截取的图片'));
@@ -144,9 +272,37 @@ window.nativeBridge = {
             logDebug(`读取剪贴板异常: ${clipErr.message}`);
             reject(clipErr);
           }
+          return;
         }
+
+        // 兜底收口：走到这里说明既不是取消、取色、贴图、复制，也不符合 OCR 判定
+        // （典型是 ENOENT / 进程被外部杀死 / maxBuffer 溢出等异常退出）。必须显式 reject，
+        // 否则 Promise 永远 pending，前端会一直停在"截图中…"状态无法恢复。
+        logDebug(`未识别的退出状态: code=${err ? err.code : 0}, signal=${err ? err.signal : ''}, stderr=${(stderr || '').slice(0, 200)}`);
+        window.nativeBridge.showMainWindow();
+        reject(new Error('截图程序异常退出，请重试'));
       });
     });
+  },
+
+  /**
+   * 获取最近一次 snipper.exe 生成的三图分离数据包（供「送去改图」或「剪贴板载入」自动恢复干净原图与红框坐标）
+   */
+  getLatestCaptureBundle: () => {
+    try {
+      const latestBundlePath = path.join(os.tmpdir(), 'rubick_latest_capture_bundle.json');
+      if (fs.existsSync(latestBundlePath)) {
+        const rawJson = fs.readFileSync(latestBundlePath, 'utf-8').replace(/^\uFEFF/, '').trim();
+        const parsed = JSON.parse(rawJson);
+        // 仅在 15 分钟内有效
+        if (parsed && parsed.cleanDataUrl && (!parsed.timestamp || Date.now() - parsed.timestamp < 15 * 60 * 1000)) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      logDebug(`getLatestCaptureBundle 失败: ${e.message}`);
+    }
+    return null;
   },
 
   /**
@@ -162,6 +318,51 @@ window.nativeBridge = {
       console.warn('剪贴板读取图片失败:', e);
     }
     return null;
+  },
+
+  /**
+   * 将 DataURL 图片直接写入系统剪贴板
+   */
+  copyImageDataUrl: (dataUrl) => {
+    try {
+      if (window.utools && typeof window.utools.copyImage === 'function') {
+        window.utools.copyImage(dataUrl);
+        return true;
+      }
+      if (nativeImage && clipboard && typeof clipboard.writeImage === 'function') {
+        const img = nativeImage.createFromDataURL(dataUrl);
+        clipboard.writeImage(img);
+        return true;
+      }
+    } catch (e) {
+      logDebug(`写入图片到剪贴板失败: ${e.message}`);
+    }
+    return false;
+  },
+
+  /**
+   * 将修改后的 DataURL 图片钉在桌面上变成置顶贴图
+   */
+  pinImageDataUrl: (dataUrl) => {
+    try {
+      if (!dataUrl || !dataUrl.includes('base64,')) return false;
+      const base64Data = dataUrl.split('base64,')[1];
+      const tempPath = path.join(os.tmpdir(), `rubick_pin_${Date.now()}.png`);
+      fs.writeFileSync(tempPath, Buffer.from(base64Data, 'base64'));
+
+      let snipperExePath = path.join(__dirname, 'bin', 'snipper.exe');
+      if (!fs.existsSync(snipperExePath)) {
+        const fallback = path.resolve(__dirname, '..', 'screenshotOcrTranslate', 'bin', 'snipper.exe');
+        if (fs.existsSync(fallback)) snipperExePath = fallback;
+      }
+      if (!fs.existsSync(snipperExePath)) return false;
+
+      execFile(snipperExePath, ['--pin-image', tempPath], { windowsHide: true }, () => {});
+      return true;
+    } catch (e) {
+      logDebug(`钉图到桌面失败: ${e.message}`);
+      return false;
+    }
   },
 
   /**

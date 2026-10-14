@@ -7,16 +7,14 @@
   "main": "index.html",
   "preload": "preload.js",
   "pluginType": "ui",
-  "logo": "https://img.icons8.com/fluency/96/screenshot.png",
+  "logo": "logo.png",
   "features": [
     {
       "code": "ocr-translate",
-      "explain": "截图文字识别与AI翻译",
+      "explain": "截图文字识别与AI翻译(工作台/历史)",
       "cmds": [
         "ocr",
-        "ocr截图",
-        "截图",
-        "截屏",
+        "文字识别",
         "截图翻译",
         "文字提取",
         "截屏翻译",
@@ -28,7 +26,7 @@
     },
     {
       "code": "direct-capture",
-      "explain": "快捷截图 (直接进入截图)",
+      "explain": "快捷截图 (直接进入截图/剪贴板)",
       "cmds": [
         "ocr截图",
         "截图",
@@ -36,9 +34,5 @@
         "屏幕截图"
       ]
     }
-  ],
-  "dependencies": {
-    "js-web-screen-shot": "^2.0.2",
-    "screenshot-desktop": "^1.15.7"
-  }
+  ]
 }

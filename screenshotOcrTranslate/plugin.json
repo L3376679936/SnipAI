@@ -1,39 +1,40 @@
 {
   "name": "rubick-plugin-ai-ocr-translate",
   "pluginName": "截图OCR与智能翻译",
-  "description": "基于多模态大模型的截图文字提取与精准流式翻译（支持自定义第三方大模型 API，具备完整截图标注工具栏）",
-  "version": "1.0.0",
+  "description": "基于多模态大模型的截图文字提取、流式翻译与 AI 智能改图（内置 Snipaste 级截图标注与桌面贴图、分级双引擎无痕改字与局部重绘）",
+  "version": "1.1.0",
   "author": "liuaobo",
   "main": "index.html",
   "preload": "preload.js",
   "pluginType": "ui",
-  "logo": "https://img.icons8.com/fluency/96/screenshot.png",
+  "logo": "logo.png",
   "features": [
     {
       "code": "ocr-translate",
-      "explain": "截图文字识别与AI翻译",
+      "explain": "截图文字识别、AI翻译与智能改图(工作台/历史)",
       "cmds": [
         "ocr",
-        "ocr截图",
-        "截图",
-        "截屏",
+        "文字识别",
         "截图翻译",
         "文字提取",
         "截屏翻译",
+        "AI改图",
+        "图片编辑",
         {
           "type": "img",
-          "label": "图片OCR与翻译"
+          "label": "图片OCR翻译与AI改图"
         }
       ]
     },
     {
       "code": "direct-capture",
-      "explain": "快捷截图 (直接进入截图)",
+      "explain": "快捷截图 (直接进入截图标注/贴图/OCR/AI改图)",
       "cmds": [
         "ocr截图",
         "截图",
         "截屏",
-        "屏幕截图"
+        "屏幕截图",
+        "截图改图"
       ]
     }
   ]

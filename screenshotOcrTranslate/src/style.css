@@ -247,6 +247,86 @@ body {
   font-style: italic;
 }
 
+/* ===== 逐段对照视图（左原文 / 右译文，译文可直接编辑） ===== */
+.parallel-view {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: #ffffff;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.parallel-view:empty::before {
+  content: "等待翻译完成后展示逐段对照...";
+  color: #94a3b8;
+  font-style: italic;
+  padding: 8px;
+}
+
+.parallel-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed #e2e8f0;
+}
+
+.parallel-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.parallel-cell {
+  padding: 8px 10px;
+  border-radius: 5px;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.parallel-cell:empty::after {
+  content: "—";
+  color: #cbd5e1;
+}
+
+/* 原文退后一层：低饱和底色 + 灰色左标，不与译文抢夺视觉焦点 */
+.parallel-cell--orig {
+  background-color: #f8fafc;
+  color: #475569;
+  border-left: 3px solid #cbd5e1;
+}
+
+/* 译文是主体内容：天蓝左标 + 悬停/聚焦反馈，明确提示"这里可以改" */
+.parallel-cell--trans {
+  background-color: #f0f9ff;
+  color: var(--text-main);
+  border-left: 3px solid #0ea5e9;
+  outline: none;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.parallel-cell--trans:hover {
+  background-color: #e0f2fe;
+}
+
+.parallel-cell--trans:focus {
+  background-color: #ffffff;
+  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.35);
+}
+
+/* 右栏在窄窗口下宽度有限，左右并排会挤成窄条，此时改为上下堆叠 */
+@media (max-width: 980px) {
+  .parallel-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .lang-select {
   padding: 4px 8px;
   font-size: 12px;
@@ -466,3 +546,286 @@ body {
   height: 48px;
   stroke: #94a3b8;
 }
+
+/* ===== 顶部双工作区切换胶囊 ===== */
+.mode-tabs {
+  display: inline-flex;
+  align-items: center;
+  background-color: #f1f5f9;
+  padding: 3px;
+  border-radius: 8px;
+  margin-left: 10px;
+  border: 1px solid #e2e8f0;
+}
+
+.mode-tab {
+  border: none;
+  background: transparent;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.mode-tab:hover {
+  color: #1e293b;
+}
+
+.mode-tab.active {
+  background-color: #ffffff;
+  color: #2563eb;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+#tabModeAiEdit.active {
+  color: #6d28d9;
+}
+
+.btn-ai-ghost {
+  color: #6d28d9;
+  border-color: #ddd6fe;
+  background-color: #f5f3ff;
+}
+
+.btn-ai-ghost:hover {
+  background-color: #ede9fe;
+  border-color: #c4b5fd;
+}
+
+.btn-ai-primary {
+  background: linear-gradient(135deg, #7c3aed 0%, #2563eb 100%);
+  color: #ffffff;
+  border: none;
+  font-weight: 600;
+}
+
+.btn-ai-primary:hover {
+  background: linear-gradient(135deg, #6d28d9 0%, #1d4ed8 100%);
+  color: #ffffff;
+}
+
+/* ===== AI 改图双栏布局 ===== */
+.workspace-ai-edit {
+  grid-template-columns: 410px 1fr;
+}
+
+@media (max-width: 900px) {
+  .workspace-ai-edit {
+    grid-template-columns: 350px 1fr;
+  }
+}
+
+.ai-control-body {
+  gap: 8px;
+  overflow-y: auto;
+}
+
+/* 分级双引擎模式切换卡片 */
+.engine-tier-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.tier-card {
+  border: 1.5px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background-color: #f8fafc;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tier-card:hover {
+  border-color: #cbd5e1;
+  background-color: #ffffff;
+}
+
+.tier-card.active[data-tier="light"] {
+  border-color: #3b82f6;
+  background-color: #eff6ff;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12);
+}
+
+.tier-card.active[data-tier="heavy"] {
+  border-color: #7c3aed;
+  background-color: #f5f3ff;
+  box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.12);
+}
+
+.tier-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.tier-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.tier-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.tier-badge--eco {
+  background-color: #d1fae5;
+  color: #065f46;
+}
+
+.tier-badge--pro {
+  background-color: #ede9fe;
+  color: #5b21b6;
+}
+
+.tier-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.ai-prompt-box {
+  resize: none;
+  line-height: 1.45;
+  font-size: 12.5px;
+}
+
+/* 精细微调面板 */
+.tuner-box {
+  border: 1px solid #e2e8f0;
+  background-color: #f8fafc;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.tuner-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tuner-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tuner-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: #334155;
+}
+
+.tuner-row label {
+  white-space: nowrap;
+}
+
+.color-Mini {
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.filter-sliders-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+}
+
+.filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: #475569;
+}
+
+.filter-item span {
+  display: flex;
+  justify-content: space-between;
+}
+
+.filter-item input[type="range"] {
+  width: 100%;
+  height: 4px;
+  cursor: pointer;
+}
+
+/* 右侧画布舞台 */
+.ai-canvas-stage {
+  background-color: #0f172a;
+  background-image: radial-gradient(#334155 1px, transparent 1px);
+  background-size: 16px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  overflow: auto;
+}
+
+.ai-canvas-wrap {
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+#aiEditCanvas {
+  max-width: 100%;
+  max-height: calc(100vh - 165px);
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+  cursor: default;
+}
+
+.ai-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(3px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+}
+
+.ai-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #a78bfa;
+  border-radius: 50%;
+  animation: aiSpin 0.8s linear infinite;
+}
+
+@keyframes aiSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
