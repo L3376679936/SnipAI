@@ -1,6 +1,26 @@
 # REFACTOR_LOG - 项目迭代与重构全局记录
 
-## [2026-10-14] 截图工具栏重构：移除「✦改图」汉字文本，回归标准方形 AI 星芒矢量图标（`screenshotOcrTranslate`）
+## [2026-10-14] 创建 uTools 市场审核合规分支（`release/utools-pure-js`）：彻底剔除二进制可执行文件，全面接入官方原生截屏 API
+
+### 变更背景与架构分流策略
+- **uTools 审核拦截**：uTools 官方应用市场硬性规定“包含可执行二进制的插件无法上架”。此前插件包内置了自研的 C# `bin/snipper.exe`，导致提审被拒。
+- **分支分流策略**：
+  - **`master` 分支**：保持**独立全功能版 (Standalone)**，内置 C# 原生截屏器，具备像素级取色放大镜、原生置顶贴图等底层能力，脱离 uTools 也可在 Windows 下独立运行；
+  - **`release/utools-pure-js` 分支**：**uTools 官方纯 JS 市场合规版**，彻底删除所有 `.exe` 和原生源码，纯纯正正采用 Web/JS 技术栈，专供打包提审上架 uTools 应用市场。
+
+### 核心改造明细
+1. **全面接入 uTools 官方原生截屏（[`screenshotOcrTranslate/preload.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/preload.js#L115-L185)）**：
+   - 彻底废除 `child_process.execFile` 及外部 exe 调用；
+   - 采用 `utools.screenCapture((base64Str) => { ... })` 原生截图通道，截取完成后自动回填至前端 Canvas 改图与 OCR 翻译工作台；
+   - 兼顾跨平台特性（天然原生支持 Windows、Mac、Linux 三端）。
+2. **纯 Web 方案重构桌面置顶贴图（[`pin.html`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/pin.html) + [`preload.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/preload.js#L248-L275)）**：
+   - 移除外部贴图进程依赖，利用 `utools.createBrowserWindow('pin.html', { frame: false, alwaysOnTop: true, transparent: true })` 实现纯 Web 级置顶无边框贴图；
+   - 支持按住拖拽、滚轮缩放、双击或按 Esc 快速关闭。
+3. **彻底清理二进制与多余源码**：
+   - `git rm -r screenshotOcrTranslate/bin/snipper.exe screenshotOcrTranslate/src/snipper`，零二进制，包体极致轻量化。
+
+---
+
 
 ### 变更背景与用户核心诉求
 - **用户实测截图反馈**：截图工具栏中「✦改图」按钮不仅自带文字标签 `"改图"`，而且宽度为 `48px`（而其余工具按钮均为 `30×30px` 标准正方形），导致工具栏视觉风格突兀、排布拥挤不统一，用户提出“把这个文字去掉吧”。

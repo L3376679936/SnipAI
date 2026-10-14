@@ -2,7 +2,6 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { clipboard, nativeImage } = require('electron');
-const { execFile } = require('child_process');
 
 // 统一保存在用户主目录下的持久化配置文件，跨会话/跨重启永不丢失
 const CONFIG_FILE_PATH = path.join(os.homedir(), '.rubick_ocr_translate_config.json');
@@ -114,174 +113,82 @@ window.nativeBridge = {
   },
 
   /**
-   * 唤起项目内置编译的轻量全屏选区截屏器 (bin/snipper.exe)
+   * 唤起 uTools 官方原生全屏选区截屏 (纯 JS API 实现，零外部可执行二进制，100% 符合市场审核规范)
    */
   captureScreen: () => {
     return new Promise((resolve, reject) => {
-      logDebug('captureScreen 被调用');
-      // 1. 隐藏 Rubick 主窗口，露出屏幕全部视野
-      window.nativeBridge.hideMainWindow();
+      logDebug('captureScreen 被调用 (uTools 官方原生纯 JS 截屏通道)');
 
-      // 2. 寻址项目自包含的选区截图程序
-      let snipperExePath = path.join(__dirname, 'bin', 'snipper.exe');
-      if (!fs.existsSync(snipperExePath)) {
-        // 兜底尝试项目相对路径
-        const fallback = path.resolve(__dirname, '..', 'screenshotOcrTranslate', 'bin', 'snipper.exe');
-        if (fs.existsSync(fallback)) {
-          snipperExePath = fallback;
-        }
-      }
-      logDebug(`snipper.exe 路径: ${snipperExePath}, 存在: ${fs.existsSync(snipperExePath)}`);
-
-      // 两条路径都找不到时必须立即失败：否则下面会去执行一个不存在的文件，
-      // 只拿到一个 ENOENT 错误码，而主窗口已经隐藏、用户看不到任何反馈。
-      if (!fs.existsSync(snipperExePath)) {
-        logDebug('未找到 snipper.exe，放弃截图');
-        window.nativeBridge.showMainWindow();
-        reject(new Error('未找到截图程序 snipper.exe，请重新编译插件'));
-        return;
-      }
-
-      // 3. 执行截图程序
-      //    注意：这里刻意不设 timeout。用户选择「贴图」时 snipper.exe 会驻留运行
-      //    显示置顶窗口，直到用户主动关闭才退出；若加超时，超时一到就会把这个
-      //    窗口连同用户的贴图一起杀掉。子进程卡死的兜底交给下面 close 事件的异常分支。
-      execFile(snipperExePath, { windowsHide: true }, (err, stdout, stderr) => {
-        const outStr = (stdout || '').trim();
-        logDebug(`snipper.exe 退出: code=${err ? err.code : 0}, stdout=${outStr}`);
-
-        // 用户取消截图 (点 ✕ 或按 Esc)
-        if (err && (err.code === 1 || outStr.includes('ACTION:CANCEL'))) {
-          logDebug('用户取消截图');
-          reject(new Error('截图已取消'));
-          return;
-        }
-
-        if (outStr.includes('ACTION:COPY_COLOR')) {
-          const parts = outStr.split('ACTION:COPY_COLOR:');
-          const colorVal = parts[1] ? parts[1].trim() : '';
-          logDebug(`用户使用取色器复制颜色值: ${colorVal}`);
-          resolve({ action: 'copy_color', color: colorVal });
-          return;
-        }
-
-        if (outStr.includes('ACTION:PIN')) {
-          logDebug('用户选择将截图钉在桌面上 (贴图)，已置顶展示并平稳退出');
-          resolve({ action: 'pin' });
-          return;
-        }
-
-        const readBundleFromFile = (filePath, deleteAfter = false) => {
-          try {
-            if (filePath && fs.existsSync(filePath)) {
-              const rawJson = fs.readFileSync(filePath, 'utf-8').replace(/^\uFEFF/, '').trim();
-              const parsed = JSON.parse(rawJson);
-              if (deleteAfter) {
-                try { fs.unlinkSync(filePath); } catch (e) {}
-              }
-              return parsed;
-            }
-          } catch (e) {
-            logDebug(`读取改图 JSON (${filePath}) 失败: ${e.message}`);
-          }
-          return null;
-        };
-
-        const latestBundlePath = path.join(os.tmpdir(), 'rubick_latest_capture_bundle.json');
-
-        const isAiEditAction = outStr.includes('ACTION:AI_EDIT:') || (err && err.code === 11);
-        if (isAiEditAction) {
-          logDebug('用户点击了【✨ 改图】按钮，恢复主窗口并进入 AI 智能改图模式');
+      // 1. 优先调用 uTools 原生截屏 API
+      if (window.utools && typeof window.utools.screenCapture === 'function') {
+        window.nativeBridge.hideMainWindow();
+        window.utools.screenCapture((base64Str) => {
           window.nativeBridge.showMainWindow();
           window.nativeBridge.setHeight(600);
 
-          let bundle = null;
-          if (outStr.includes('ACTION:AI_EDIT:')) {
-            const bundlePath = outStr.split('ACTION:AI_EDIT:')[1].split(/\r?\n/)[0].trim();
-            bundle = readBundleFromFile(bundlePath, true);
-          }
-          if (!bundle) {
-            bundle = readBundleFromFile(latestBundlePath, false);
-          }
-
-          if (bundle && bundle.cleanDataUrl) {
-            logDebug(`成功载入 AI 改图三图分离包: width=${bundle.width}, height=${bundle.height}, boxes=${(bundle.boxes || []).length}`);
-            resolve({
-              action: 'ai_edit',
-              dataUrl: bundle.annotatedDataUrl || bundle.cleanDataUrl,
-              bundle
-            });
+          if (!base64Str) {
+            logDebug('用户取消了 uTools 截屏');
+            reject(new Error('截图已取消'));
             return;
           }
 
+          const dataUrl = base64Str.startsWith('data:') ? base64Str : `data:image/png;base64,${base64Str}`;
+          logDebug(`uTools 原生截屏成功，生成图片 DataURL (字符数: ${dataUrl.length})`);
+
+          // 自动复制到剪贴板，方便用户在其他地方粘贴
           try {
-            const img = clipboard.readImage();
-            if (img && !img.isEmpty()) {
-              const fallbackUrl = img.toDataURL();
-              logDebug('通过剪贴板兜底载入待改图图片');
-              resolve({
-                action: 'ai_edit',
-                dataUrl: fallbackUrl,
-                bundle: {
-                  cleanDataUrl: fallbackUrl,
-                  annotatedDataUrl: fallbackUrl,
-                  maskDataUrl: null,
-                  hasMaskRegion: false,
-                  textNotes: [],
-                  boxes: []
-                }
-              });
-              return;
+            if (window.utools.copyImage) {
+              window.utools.copyImage(dataUrl);
             }
-          } catch (clipErr) {
-            logDebug(`读取剪贴板兜底异常: ${clipErr.message}`);
-          }
+          } catch (e) {}
 
-          reject(new Error('未能读取到待修改的截图数据'));
-          return;
-        }
+          const bundle = {
+            cleanDataUrl: dataUrl,
+            annotatedDataUrl: dataUrl,
+            maskDataUrl: null,
+            hasMaskRegion: false,
+            textNotes: [],
+            boxes: [],
+            timestamp: Date.now()
+          };
 
-        const isOcrAction = outStr.includes('ACTION:OCR') || (err && err.code === 10);
-        const isCopyOnly = outStr.includes('ACTION:COPY') || (!isOcrAction && !err);
+          resolve({
+            action: 'ocr',
+            dataUrl: dataUrl,
+            bundle: bundle
+          });
+        });
+        return;
+      }
 
-        if (isCopyOnly) {
-          logDebug('用户仅选择确定截图 (✔)，图片已在剪贴板');
-          const latestBundle = readBundleFromFile(latestBundlePath, false);
-          resolve({ action: 'copy', bundle: latestBundle });
-          return;
-        }
-
-        if (isOcrAction) {
-          logDebug('用户点击了【识别文字】按钮，恢复主窗口并启动 OCR 翻译');
+      // 2. 兜底尝试读取系统剪贴板图片
+      try {
+        const img = clipboard.readImage();
+        if (img && !img.isEmpty()) {
           window.nativeBridge.showMainWindow();
-          window.nativeBridge.setHeight(600);
-          const latestBundle = readBundleFromFile(latestBundlePath, false);
-          try {
-            const img = clipboard.readImage();
-            if (img && !img.isEmpty()) {
-              logDebug('成功从剪贴板读取到图片');
-              resolve({ action: 'ocr', dataUrl: img.toDataURL(), bundle: latestBundle });
-              return;
+          const clipUrl = img.toDataURL();
+          logDebug('通过剪贴板成功读取到截图');
+          resolve({
+            action: 'ocr',
+            dataUrl: clipUrl,
+            bundle: {
+              cleanDataUrl: clipUrl,
+              annotatedDataUrl: clipUrl,
+              maskDataUrl: null,
+              hasMaskRegion: false,
+              textNotes: [],
+              boxes: [],
+              timestamp: Date.now()
             }
-            if (latestBundle && latestBundle.annotatedDataUrl) {
-              resolve({ action: 'ocr', dataUrl: latestBundle.annotatedDataUrl, bundle: latestBundle });
-              return;
-            }
-            reject(new Error('未在剪贴板中检测到截取的图片'));
-          } catch (clipErr) {
-            logDebug(`读取剪贴板异常: ${clipErr.message}`);
-            reject(clipErr);
-          }
+          });
           return;
         }
+      } catch (clipErr) {
+        logDebug(`剪贴板兜底异常: ${clipErr.message}`);
+      }
 
-        // 兜底收口：走到这里说明既不是取消、取色、贴图、复制，也不符合 OCR 判定
-        // （典型是 ENOENT / 进程被外部杀死 / maxBuffer 溢出等异常退出）。必须显式 reject，
-        // 否则 Promise 永远 pending，前端会一直停在"截图中…"状态无法恢复。
-        logDebug(`未识别的退出状态: code=${err ? err.code : 0}, signal=${err ? err.signal : ''}, stderr=${(stderr || '').slice(0, 200)}`);
-        window.nativeBridge.showMainWindow();
-        reject(new Error('截图程序异常退出，请重试'));
-      });
+      window.nativeBridge.showMainWindow();
+      reject(new Error('未检测到 uTools 官方截屏环境，请在 uTools 客户端内运行'));
     });
   },
 
@@ -341,24 +248,30 @@ window.nativeBridge = {
   },
 
   /**
-   * 将修改后的 DataURL 图片钉在桌面上变成置顶贴图
+   * 将修改后的 DataURL 图片钉在桌面上变成置顶贴图 (纯 Web 实现，零 exe 依赖)
    */
   pinImageDataUrl: (dataUrl) => {
     try {
-      if (!dataUrl || !dataUrl.includes('base64,')) return false;
-      const base64Data = dataUrl.split('base64,')[1];
-      const tempPath = path.join(os.tmpdir(), `rubick_pin_${Date.now()}.png`);
-      fs.writeFileSync(tempPath, Buffer.from(base64Data, 'base64'));
-
-      let snipperExePath = path.join(__dirname, 'bin', 'snipper.exe');
-      if (!fs.existsSync(snipperExePath)) {
-        const fallback = path.resolve(__dirname, '..', 'screenshotOcrTranslate', 'bin', 'snipper.exe');
-        if (fs.existsSync(fallback)) snipperExePath = fallback;
+      if (!dataUrl) return false;
+      if (window.utools && typeof window.utools.createBrowserWindow === 'function') {
+        const pinWin = window.utools.createBrowserWindow('pin.html', {
+          title: '贴图',
+          frame: false,
+          alwaysOnTop: true,
+          transparent: true,
+          skipTaskbar: false,
+          resizable: true,
+          useContentSize: true
+        }, () => {
+          if (pinWin && pinWin.webContents) {
+            pinWin.webContents.executeJavaScript(`
+              if (window.loadPinImage) window.loadPinImage(${JSON.stringify(dataUrl)});
+            `);
+          }
+        });
+        return true;
       }
-      if (!fs.existsSync(snipperExePath)) return false;
-
-      execFile(snipperExePath, ['--pin-image', tempPath], { windowsHide: true }, () => {});
-      return true;
+      return false;
     } catch (e) {
       logDebug(`钉图到桌面失败: ${e.message}`);
       return false;

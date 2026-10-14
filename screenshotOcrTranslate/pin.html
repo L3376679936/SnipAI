@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>贴图</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: transparent;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .pin-container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-app-region: drag;
+      cursor: move;
+      position: relative;
+    }
+    .pin-img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      border: 1px solid rgba(14, 165, 233, 0.6);
+      border-radius: 4px;
+      pointer-events: auto;
+    }
+    .pin-hint {
+      position: absolute;
+      bottom: 6px;
+      right: 8px;
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.7);
+      background: rgba(0, 0, 0, 0.55);
+      padding: 2px 6px;
+      border-radius: 3px;
+      opacity: 0;
+      transition: opacity 0.2s;
+      pointer-events: none;
+    }
+    .pin-container:hover .pin-hint {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="pin-container" title="拖拽移动 · 滚轮缩放 · 双击或按 Esc 关闭">
+    <img id="pinImage" class="pin-img" alt="贴图" />
+    <span class="pin-hint">双击或 Esc 关闭</span>
+  </div>
+
+  <script>
+    let scale = 1.0;
+    const imgEl = document.getElementById('pinImage');
+
+    window.loadPinImage = function(url) {
+      if (imgEl && url) {
+        imgEl.src = url;
+      }
+    };
+
+    window.addEventListener('dblclick', () => {
+      window.close();
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        window.close();
+      }
+    });
+
+    window.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      if (e.deltaY < 0) {
+        scale = Math.min(4.0, scale + 0.08);
+      } else {
+        scale = Math.max(0.2, scale - 0.08);
+      }
+      imgEl.style.transform = `scale(${scale})`;
+    }, { passive: false });
+  </script>
+</body>
+</html>
