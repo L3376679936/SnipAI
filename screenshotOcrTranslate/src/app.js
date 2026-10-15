@@ -849,12 +849,13 @@ const captureManager = new ScreenCaptureManager({
     rawImageBase64 = (latestCaptureBundle && latestCaptureBundle.cleanDataUrl) ? latestCaptureBundle.cleanDataUrl : base64Data;
     currentImageBase64 = rawImageBase64;
 
-    // 贴图操作
+    // 贴图操作 (1:1 对齐原生贴图，桌面置顶呈现，主窗口不弹窗打扰)
     if (res && res.action === 'pin') {
-      if (window.nativeBridge && window.nativeBridge.showMainWindow) {
-        window.nativeBridge.showMainWindow();
+      const pinUrl = (latestCaptureBundle && latestCaptureBundle.annotatedDataUrl) || base64Data;
+      if (window.nativeBridge && window.nativeBridge.pinImageDataUrl) {
+        window.nativeBridge.pinImageDataUrl(pinUrl);
       }
-      showToast('✓ 已贴图到桌面 (Esc / 双击关闭贴图)');
+      showToast('✓ 已贴图到桌面 (Esc / 双击 / 右键关闭贴图)');
       return;
     }
 

@@ -346,12 +346,39 @@ window.nativeBridge = {
               } catch (e) {}
             }
 
-            window.nativeBridge.showMainWindow();
-            window.nativeBridge.setHeight(620);
+            // 只有当需要用户查看或进一步操作(改图/OCR/就绪态)时才恢复主窗口；静默动作(复制/贴图/取消)绝不弹窗打扰
+            const isQuietAction = result && (result.action === 'copy' || result.action === 'pin' || result.action === 'cancel');
+            if (!isQuietAction) {
+              window.nativeBridge.showMainWindow();
+              window.nativeBridge.setHeight(620);
+            }
 
             if (result && result.action && result.action !== 'cancel') {
               logDebug(`悬浮工具栏成功触发动作: ${result.action}`);
               const exportData = result.data || {};
+              const finalImgUrl = exportData.annotatedDataUrl || exportData.cleanDataUrl || dataUrl;
+
+              // 1. 复制操作：双保险由宿主底层直接写入系统剪贴板
+              if (result.action === 'copy') {
+                try {
+                  const nImg = nativeImage.createFromDataURL(finalImgUrl);
+                  clipboard.writeImage(nImg);
+                  logDebug('已成功由 preload 将截图写入系统剪贴板');
+                } catch (clipErr) {
+                  logDebug(`写入系统剪贴板异常: ${clipErr.message}`);
+                }
+              }
+
+              // 2. 贴图操作：直接由底层无缝唤起置顶贴图窗口
+              if (result.action === 'pin') {
+                try {
+                  window.nativeBridge.pinImageDataUrl(finalImgUrl);
+                  logDebug('已成功由 preload 直连唤起桌面置顶贴图窗口');
+                } catch (pinErr) {
+                  logDebug(`唤起贴图窗口异常: ${pinErr.message}`);
+                }
+              }
+
               resolve({
                 action: result.action,
                 dataUrl: exportData.cleanDataUrl || dataUrl,
@@ -368,6 +395,8 @@ window.nativeBridge = {
               reject(new Error('截图已取消'));
             } else {
               // 兜底直接返回截取的数据
+              window.nativeBridge.showMainWindow();
+              window.nativeBridge.setHeight(620);
               resolve({
                 action: 'ready',
                 dataUrl: dataUrl,
