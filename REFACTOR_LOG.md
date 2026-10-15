@@ -1,6 +1,15 @@
 # REFACTOR_LOG - 项目迭代与重构全局记录
 
-## [2026-10-15] 图像渲染品质升级：突破 Retina / High-DPI 物理像素点 1:1 对齐，根除截图发糊与线条毛边（`release/utools-pure-js`）
+## [2026-10-15] uTools 市场发布规范合规：精简功能指令至 5 个上限并同步版本号为 1.0.1（`release/utools-pure-js`）
+
+### 优化背景
+- **开发者工具发布警告**：*“为确保搜索体验高效，每个功能的「功能指令」建议不超过 5 个”*
+- **合规改造点**（[`plugin.json`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/plugin.json)）：
+  1. `ocr-translate` 指令由 8 个精简聚焦为 5 个核心指令：`"文字识别"`, `"截图翻译"`, `"AI改图"`, `"ocr"`, 以及支持右键直连的图片匹配指令 `{ "type": "img", "label": "图片OCR翻译与AI改图" }`；
+  2. `direct-capture` 功能保持为 5 个高频截图指令：`"ocr截图"`, `"截图"`, `"截屏"`, `"屏幕截图"`, `"截图改图"`；
+  3. 同步 `plugin.json` 中的 `version` 为 `1.0.1`，消除版本号歧义并保证 uTools 发布检测 100% 绿色通过。
+
+---
 
 ### 痛点根因分析
 - **用户痛点反馈**：*“为什么截完图，使用工具栏的时候，图片看着有点糊呢？”*

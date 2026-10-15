@@ -2,7 +2,7 @@
   "name": "rubick-plugin-ai-ocr-translate",
   "pluginName": "截图OCR与智能翻译",
   "description": "基于多模态大模型的截图文字提取、流式翻译与 AI 智能改图（内置 Snipaste 级截图标注与桌面贴图、分级双引擎无痕改字与局部重绘）",
-  "version": "1.1.0",
+  "version": "1.0.1",
   "author": "liuaobo",
   "main": "index.html",
   "preload": "preload.js",
@@ -13,13 +13,10 @@
       "code": "ocr-translate",
       "explain": "截图文字识别、AI翻译与智能改图(工作台/历史)",
       "cmds": [
-        "ocr",
         "文字识别",
         "截图翻译",
-        "文字提取",
-        "截屏翻译",
         "AI改图",
-        "图片编辑",
+        "ocr",
         {
           "type": "img",
           "label": "图片OCR翻译与AI改图"
