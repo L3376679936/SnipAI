@@ -17,6 +17,35 @@
 
     <!-- 行内文字输入框 -->
     <textarea id="inlineTextInput" class="inline-text-input" style="display: none;" placeholder="输入文字... (Enter 确定, Esc 取消)" rows="1"></textarea>
+
+    <!-- F1 快捷键指南卡片 (按 F1 切换显示) -->
+    <div id="shortcutHelpCard" class="shortcut-help-card" style="display: none;">
+      <div class="help-title">快捷键指南 (按 F1 关闭)</div>
+      <div class="help-row"><span class="key-tag">Enter</span> / <span class="key-tag">双击</span><span>复制截图到剪贴板</span></div>
+      <div class="help-row"><span class="key-tag">Esc</span> / <span class="key-tag">右键</span><span>逐级取消 / 退出截图</span></div>
+      <div class="help-row"><span class="key-tag">F3</span><span>钉在桌面置顶贴图</span></div>
+      <div class="help-row"><span class="key-tag">Ctrl+S</span><span>保存高清图片</span></div>
+      <div class="help-row"><span class="key-tag">C</span><span>复制光标处 HEX 颜色值</span></div>
+      <div class="help-row"><span class="key-tag">滚轮</span> / <span class="key-tag">点粗细胶囊</span><span>调节笔宽 / 颗粒度</span></div>
+      <div class="help-divider"></div>
+      <div class="help-grid">
+        <div><span class="key-tag">R</span> 矩形</div>
+        <div><span class="key-tag">E</span> 椭圆</div>
+        <div><span class="key-tag">A</span> 箭头</div>
+        <div><span class="key-tag">L</span> 直线</div>
+        <div><span class="key-tag">B</span> 画笔</div>
+        <div><span class="key-tag">M</span> 荧光笔</div>
+        <div><span class="key-tag">K</span> 马赛克</div>
+        <div><span class="key-tag">G</span> 模糊</div>
+        <div><span class="key-tag">T</span> 文字</div>
+        <div><span class="key-tag">N</span> 序号</div>
+        <div><span class="key-tag">X</span> 橡皮擦</div>
+        <div><span class="key-tag">Ctrl+Z</span> 撤销</div>
+      </div>
+    </div>
+
+    <!-- 复制颜色提示气泡 -->
+    <div id="colorCopyToast" class="color-copy-toast" style="display: none;"></div>
   </div>
 
   <!-- 悬浮工具栏外层包裹 (吸附于截图右下角) -->
@@ -26,20 +55,29 @@
       <!-- 1. 主参数胶囊 (当前笔宽/颗粒度，滚轮可快速调节) -->
       <div id="subParamBadge" class="sub-param-badge" title="当前笔宽/大小 (支持在画布上滑动滚轮快速调节)">4px</div>
 
-      <!-- 2A. 形状专属选项：实心填充开关、虚线开关 -->
+      <!-- 2A. 形状专属选项：实心填充开关、虚线开关、矩形/椭圆直选 -->
       <div id="subShapeOptions" class="sub-section" style="display: none;">
+        <button id="btnShapeRect" type="button" class="sub-icon-btn active" title="矩形 (R)">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+        </button>
+        <button id="btnShapeEllipse" type="button" class="sub-icon-btn" title="椭圆 (E)">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+        </button>
         <button id="btnToggleFill" type="button" class="sub-icon-btn" title="实心填充开关">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" id="fillIconInner" fill="none"/></svg>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" id="fillIconInner" fill="none"/></svg>
         </button>
         <button id="btnToggleDash" type="button" class="sub-icon-btn" title="虚线 / 实线切换">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="7" y2="12"/><line x1="10" y1="12" x2="14" y2="12"/><line x1="17" y1="12" x2="21" y2="12"/></svg>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="7" y2="12"/><line x1="10" y1="12" x2="14" y2="12"/><line x1="17" y1="12" x2="21" y2="12"/></svg>
         </button>
       </div>
 
-      <!-- 2B. 线条专属选项：箭头样式下拉/切换 -->
+      <!-- 2B. 线条专属选项：箭头样式下拉/切换 + 虚线开关 -->
       <div id="subLineOptions" class="sub-section" style="display: none;">
         <button id="btnArrowStyle" type="button" class="sub-icon-btn sub-arrow-btn" title="切换箭头样式 (单向箭头 / 双向 / 直线)">
           <span id="arrowStyleLabel" style="font-size: 11px;">单向 ↗</span>
+        </button>
+        <button id="btnLineDash" type="button" class="sub-icon-btn" title="线条虚线 / 实线切换">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="7" y2="12"/><line x1="10" y1="12" x2="14" y2="12"/><line x1="17" y1="12" x2="21" y2="12"/></svg>
         </button>
       </div>
 

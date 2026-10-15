@@ -372,3 +372,74 @@ html, body {
   font-size: 11px;
   font-weight: 600;
 }
+
+/* F1 快捷键指南浮层 */
+.shortcut-help-card {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  padding: 12px 16px;
+  color: #f8fafc;
+  font-size: 12px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+  z-index: 999;
+  pointer-events: none;
+  width: 260px;
+}
+.help-title {
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: #38bdf8;
+}
+.help-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: #e2e8f0;
+}
+.help-divider {
+  height: 1px;
+  background: rgba(148, 163, 184, 0.2);
+  margin: 8px 0;
+}
+.help-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  font-size: 11px;
+  color: #cbd5e1;
+}
+.key-tag {
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-weight: 600;
+  color: #fff;
+}
+
+/* 复制颜色气泡 */
+.color-copy-toast {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  z-index: 1000;
+  pointer-events: none;
+  animation: fadeInOut 2s ease forwards;
+}

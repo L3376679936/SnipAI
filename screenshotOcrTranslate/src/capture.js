@@ -31,11 +31,16 @@
   const subTextOptions = document.getElementById('subTextOptions');
 
   // 二级子控制控件
+  const btnShapeRect = document.getElementById('btnShapeRect');
+  const btnShapeEllipse = document.getElementById('btnShapeEllipse');
   const btnToggleFill = document.getElementById('btnToggleFill');
   const fillIconInner = document.getElementById('fillIconInner');
   const btnToggleDash = document.getElementById('btnToggleDash');
   const btnArrowStyle = document.getElementById('btnArrowStyle');
   const arrowStyleLabel = document.getElementById('arrowStyleLabel');
+  const btnLineDash = document.getElementById('btnLineDash');
+  const shortcutHelpCard = document.getElementById('shortcutHelpCard');
+  const colorCopyToast = document.getElementById('colorCopyToast');
   const btnToggleBlurMode = document.getElementById('btnToggleBlurMode');
   const blurModeLabel = document.getElementById('blurModeLabel');
   const rngMosaicSize = document.getElementById('rngMosaicSize');
@@ -652,7 +657,13 @@
     winDragStart = { x: e.screenX, y: e.screenY };
   });
 
+  let currentCursorPos = { x: 0, y: 0 };
+
   window.addEventListener('mousemove', (e) => {
+    const sRect = stageContainer.getBoundingClientRect();
+    currentCursorPos.x = Math.max(0, Math.min(Math.max(1, stageWidth - 1), Math.round(e.clientX - sRect.left)));
+    currentCursorPos.y = Math.max(0, Math.min(Math.max(1, stageHeight - 1), Math.round(e.clientY - sRect.top)));
+
     if (isWindowMoving) {
       const dx = Math.round(e.screenX - winDragStart.x);
       const dy = Math.round(e.screenY - winDragStart.y);
@@ -797,6 +808,8 @@
 
     if (tool === 'rect' || tool === 'ellipse') {
       subShapeOptions.style.display = 'flex';
+      if (btnShapeRect) btnShapeRect.classList.toggle('active', tool === 'rect');
+      if (btnShapeEllipse) btnShapeEllipse.classList.toggle('active', tool === 'ellipse');
       subParamBadge.textContent = activeSize + 'px';
       subPalette.style.display = 'flex';
     } else if (tool === 'arrow' || tool === 'line') {
@@ -838,6 +851,26 @@
     }
   });
 
+  // 形状：矩形/椭圆直选
+  if (btnShapeRect) {
+    btnShapeRect.addEventListener('click', () => {
+      activeTool = 'rect';
+      btnShapeRect.classList.add('active');
+      if (btnShapeEllipse) btnShapeEllipse.classList.remove('active');
+      const ts = document.getElementById('toolShape');
+      if (ts) ts.dataset.tool = 'rect';
+    });
+  }
+  if (btnShapeEllipse) {
+    btnShapeEllipse.addEventListener('click', () => {
+      activeTool = 'ellipse';
+      btnShapeEllipse.classList.add('active');
+      if (btnShapeRect) btnShapeRect.classList.remove('active');
+      const ts = document.getElementById('toolShape');
+      if (ts) ts.dataset.tool = 'ellipse';
+    });
+  }
+
   // 形状：填充开关
   btnToggleFill.addEventListener('click', () => {
     isFilled = !isFilled;
@@ -845,11 +878,16 @@
     fillIconInner.setAttribute('fill', isFilled ? 'currentColor' : 'none');
   });
 
-  // 虚线开关
-  btnToggleDash.addEventListener('click', () => {
-    isDashed = !isDashed;
-    btnToggleDash.classList.toggle('active', isDashed);
-  });
+  // 虚线开关 (形状与线条双向同步)
+  function syncDashState(dashed) {
+    isDashed = dashed;
+    if (btnToggleDash) btnToggleDash.classList.toggle('active', isDashed);
+    if (btnLineDash) btnLineDash.classList.toggle('active', isDashed);
+  }
+  btnToggleDash.addEventListener('click', () => syncDashState(!isDashed));
+  if (btnLineDash) {
+    btnLineDash.addEventListener('click', () => syncDashState(!isDashed));
+  }
 
   // 线条：箭头类型切换
   btnArrowStyle.addEventListener('click', () => {
@@ -862,6 +900,30 @@
     } else {
       arrowStyle = 'single';
       arrowStyleLabel.textContent = '单向 ↗';
+    }
+  });
+
+  // 主参数胶囊点击步进循环粗细 (1:1 对齐原版 C# Snipper StepActiveSize)
+  subParamBadge.style.cursor = 'pointer';
+  subParamBadge.addEventListener('click', () => {
+    if (activeTool === 'brush' || activeTool === 'marker' || activeTool === 'rect' || activeTool === 'ellipse' || activeTool === 'arrow' || activeTool === 'line') {
+      const presets = [2, 4, 8, 16];
+      let idx = presets.indexOf(activeSize);
+      activeSize = presets[(idx + 1) % presets.length];
+      subParamBadge.textContent = activeSize + 'px';
+    } else if (activeTool === 'mosaic' || activeTool === 'blur') {
+      const presets = [6, 10, 16, 24];
+      let idx = presets.indexOf(mosaicRadius);
+      mosaicRadius = presets[(idx + 1) % presets.length];
+      rngMosaicSize.value = mosaicRadius;
+      valMosaicSize.textContent = mosaicRadius;
+      subParamBadge.textContent = mosaicRadius + 'px';
+    } else if (activeTool === 'text') {
+      const presets = [12, 16, 22, 28, 36];
+      let idx = presets.indexOf(activeFontSize);
+      activeFontSize = presets[(idx + 1) % presets.length];
+      selFontSize.value = activeFontSize;
+      subParamBadge.textContent = activeFontSize + 'px';
     }
   });
 
@@ -1077,6 +1139,11 @@
       handleRightClick();
     } else if (e.key === 'Enter') {
       finishWithAction('copy');
+    } else if (e.key === 'F1') {
+      e.preventDefault();
+      if (shortcutHelpCard) {
+        shortcutHelpCard.style.display = shortcutHelpCard.style.display === 'none' ? 'block' : 'none';
+      }
     } else if (e.key === 'F3') {
       finishWithAction('pin');
     } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
@@ -1090,7 +1157,20 @@
       btnRedo.click();
     } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
       const k = e.key.toLowerCase();
-      if (k === 'r') document.getElementById('toolShape').click();
+      if (k === 'c') {
+        try {
+          const pixel = bgCtx.getImageData(currentCursorPos.x, currentCursorPos.y, 1, 1).data;
+          const hex = '#' + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1);
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(hex);
+          }
+          if (colorCopyToast) {
+            colorCopyToast.textContent = `✓ 已复制颜色值: ${hex}`;
+            colorCopyToast.style.display = 'block';
+            setTimeout(() => { colorCopyToast.style.display = 'none'; }, 2000);
+          }
+        } catch (err) {}
+      } else if (k === 'r') document.getElementById('toolShape').click();
       else if (k === 'e') { activeTool = 'ellipse'; document.getElementById('toolShape').click(); }
       else if (k === 'a') document.getElementById('toolLineArrow').click();
       else if (k === 'l') { activeTool = 'line'; document.getElementById('toolLineArrow').click(); }
