@@ -1,5 +1,23 @@
 # REFACTOR_LOG - 项目迭代与重构全局记录
 
+## [2026-10-15] 核心故障根治：根除截图进程卡死/无法截图问题与单例抢占式调度重构（`release/utools-pure-js`）
+
+### 故障现象与排查分析
+- **用户反馈**：*“现在截不了图了是什么原因？”*
+- **日志排查**：后台日志长期反复输出 `startCapture: 正在截图中，跳过重复请求`。
+- **两大根本病因**：
+  1. **preload.js 嵌套语法故障**：此前在对象内部意外引入了非法声明代码，导致 `preload.js` 报 `SyntaxError: Unexpected identifier 'currentActiveCaptureWindow'`，造成底层 `window.nativeBridge` 初始化失败；
+  2. **跨生命周期的布尔状态锁死**：原 `ScreenCaptureManager.isCapturing` 为长期状态锁，一旦子窗口在创建、聚焦或关闭过程中发生任何非预期异常而未派发 `closed` 事件，该状态锁便永久保持为 `true`，导致后续所有点击全部被前端拦截。
+
+### 核心改造与修复
+1. **preload 全局单例强力清场机制（[`preload.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/preload.js)）**：
+   - 彻底修复 `preload.js` 语法并将其提到全局最外层作用域；
+   - 引入 `currentActiveCaptureWindow` 与 `currentPendingReject`：当有新截图请求唤起时，无条件强制销毁上一次未正常关闭的悬浮窗口并安全结算挂起的 Promise，杜绝任何僵尸窗口悬挂。
+2. **app.js 彻底摒弃死锁型布尔锁，改用 300ms 快速点击防抖（[`src/app.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/app.js)）**：
+   - 移除 `this.isCapturing` 状态机，替换为 `now - this.lastTriggerTime < 300` 快速防抖，既杜绝用户鼠标极速双击误触，又彻底根除了“一直提示正在截图”的死锁问题。
+
+---
+
 ## [2026-10-14] 核心 Bug 修复：解决 High-DPI 缩放导致截图图片自动放大全屏与工具栏超出版面丢失问题（`release/utools-pure-js`）
 
 ### 变更背景与用户核心痛点

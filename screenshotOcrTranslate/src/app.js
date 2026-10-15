@@ -21,22 +21,18 @@ class ScreenCaptureManager {
   constructor({ onComplete, onCancel }) {
     this.onComplete = onComplete;
     this.onCancel = onCancel;
-    this.isCapturing = false;
+    this.lastTriggerTime = 0;
     this.currentIntent = 'auto'; // 'auto' | 'ai_edit' | 'ocr'
   }
 
   async startCapture(intent = 'auto', force = false) {
     this.currentIntent = intent;
     const now = Date.now();
-    // 如果距上次请求已超过 5 秒，或者显式 force 触发，强制打破死锁
-    if (this.isCapturing && !force && (now - (this.lastCaptureTime || 0) < 5000)) {
-      if (window.nativeBridge && window.nativeBridge.log) {
-        window.nativeBridge.log('startCapture: 正在截图中，跳过重复请求');
-      }
+    // 300ms 快速点击防抖，防止高频狂点误触；彻底斩断布尔死锁根源！
+    if (!force && (now - (this.lastTriggerTime || 0) < 300)) {
       return;
     }
-    this.isCapturing = true;
-    this.lastCaptureTime = now;
+    this.lastTriggerTime = now;
 
     try {
       if (window.nativeBridge && window.nativeBridge.captureScreen) {
@@ -44,7 +40,6 @@ class ScreenCaptureManager {
           window.nativeBridge.log(`调用 window.nativeBridge.captureScreen() [intent=${intent}]`);
         }
         const base64Data = await window.nativeBridge.captureScreen();
-        this.isCapturing = false;
         if (this.onComplete) {
           this.onComplete(base64Data, this.currentIntent);
         }
@@ -52,7 +47,6 @@ class ScreenCaptureManager {
         throw new Error('当前环境未提供截图接口');
       }
     } catch (err) {
-      this.isCapturing = false;
       if (window.nativeBridge && window.nativeBridge.showMainWindow) {
         window.nativeBridge.showMainWindow();
       }

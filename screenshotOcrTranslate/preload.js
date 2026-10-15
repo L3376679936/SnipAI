@@ -56,6 +56,10 @@ try {
   logDebug(`探测 Electron 失败: ${e.message}`);
 }
 
+// 全局活动截屏窗口单例引用与防悬挂句柄 (强力保底：新截图唤起时无条件清理旧窗口与解除挂起)
+let currentActiveCaptureWindow = null;
+let currentPendingReject = null;
+
 /**
  * 宿主与底层能力桥接器 (纯内置自包含实现，无任何外部软件依赖)
  */
@@ -131,6 +135,23 @@ window.nativeBridge = {
     return new Promise((resolve, reject) => {
       logDebug('captureScreen 被调用 (纯 JS 悬浮工具栏交互截屏通道)');
 
+      // 强力清场：若上一轮截图窗口未被释放，立即安全销毁旧窗口并结算旧 Promise
+      if (currentActiveCaptureWindow) {
+        try {
+          if (!currentActiveCaptureWindow.isDestroyed()) {
+            currentActiveCaptureWindow.close();
+          }
+        } catch (e) {}
+        currentActiveCaptureWindow = null;
+      }
+      if (currentPendingReject) {
+        try {
+          currentPendingReject(new Error('新截图已唤起，终止上一轮截图'));
+        } catch (e) {}
+        currentPendingReject = null;
+      }
+      currentPendingReject = reject;
+
       if (window.utools && typeof window.utools.screenCapture === 'function') {
         window.nativeBridge.hideMainWindow();
 
@@ -139,6 +160,7 @@ window.nativeBridge = {
           if (!base64Str) {
             logDebug('用户取消了原生截屏');
             window.nativeBridge.showMainWindow();
+            currentPendingReject = null;
             reject(new Error('截图已取消'));
             return;
           }
@@ -270,6 +292,7 @@ window.nativeBridge = {
                 `);
               }
             });
+            currentActiveCaptureWindow = captureWin;
           } catch (winErr) {
             if (bridgeChannel) { try { bridgeChannel.close(); } catch (e) {} bridgeChannel = null; }
             logDebug(`创建 capture.html 失败: ${winErr.message}，降级回退`);
@@ -309,6 +332,8 @@ window.nativeBridge = {
             if (captureWin && !captureWin.isDestroyed()) {
               try { captureWin.close(); } catch (e) {}
             }
+            currentActiveCaptureWindow = null;
+            currentPendingReject = null;
 
             // 读取 IPC 结果
             let result = explicitResult;
