@@ -76,6 +76,7 @@
   let physicalH = 0;
   let stageWidth = 0;
   let stageHeight = 0;
+  let currentDeviceScale = 1;
 
   let activeTool = null; // 当前激活工具 (null 表示未激活工具，处于选区拖拽移动模式)
   let activeColor = '#ef4444';
@@ -143,26 +144,30 @@
         ? Math.max(8, initPayload.cropY - initPayload.winY)
         : 8;
 
-      // 设置舞台 CSS 尺寸与默认光标及原位偏移
+      currentDeviceScale = deviceScale;
+
+      // 设置舞台 CSS 尺寸与默认光标及原位偏移 (逻辑像素完美贴合屏幕视口)
       stageContainer.style.left = stageOffsetX + 'px';
       stageContainer.style.top = stageOffsetY + 'px';
       stageContainer.style.width = stageWidth + 'px';
       stageContainer.style.height = stageHeight + 'px';
       stageContainer.style.cursor = 'move'; // 默认未选工具时为平移移动手势
 
-      // 画布像素尺寸与 CSS 尺寸 1:1 严格对齐逻辑像素，消除一切坐标错位
-      bgCanvas.width = stageWidth;
-      bgCanvas.height = stageHeight;
+      // 核心突破：内部渲染分辨率必须保持真实的物理像素 (physicalW x physicalH)，绝不下采样！
+      // CSS 显示尺寸设为逻辑尺寸 (stageWidth x stageHeight)！
+      // 实现 Retina / High-DPI 屏幕 1:1 像素点完美点对点映射，原图多么清晰这里就多么清晰！
+      bgCanvas.width = physicalW;
+      bgCanvas.height = physicalH;
       bgCanvas.style.width = stageWidth + 'px';
       bgCanvas.style.height = stageHeight + 'px';
 
-      annotCanvas.width = stageWidth;
-      annotCanvas.height = stageHeight;
+      annotCanvas.width = physicalW;
+      annotCanvas.height = physicalH;
       annotCanvas.style.width = stageWidth + 'px';
       annotCanvas.style.height = stageHeight + 'px';
 
-      // 绘制背景底图
-      bgCtx.drawImage(fullSnapshotImg, 0, 0, stageWidth, stageHeight);
+      // 绘制背景底图：以原生无损物理分辨率 1:1 注入，文字与边缘锐利如刀割！
+      bgCtx.drawImage(fullSnapshotImg, 0, 0, physicalW, physicalH);
 
       // 选区左上角尺寸标签
       sizeBadge.textContent = `${stageWidth} × ${stageHeight} px`;
@@ -282,7 +287,13 @@
   }
 
   function renderActiveDrawing(curX, curY) {
-    redrawAnnotations();
+    annotCtx.clearRect(0, 0, physicalW || stageWidth, physicalH || stageHeight);
+    annotCtx.save();
+    annotCtx.scale(currentDeviceScale, currentDeviceScale);
+
+    for (const item of annotHistory) {
+      renderSingleItem(annotCtx, item);
+    }
 
     const minX = Math.min(drawStart.x, curX);
     const minY = Math.min(drawStart.y, curY);
@@ -313,6 +324,7 @@
     };
 
     renderSingleItem(annotCtx, tempItem);
+    annotCtx.restore();
   }
 
   function commitActiveDrawing(curX, curY) {
@@ -352,10 +364,13 @@
   }
 
   function redrawAnnotations() {
-    annotCtx.clearRect(0, 0, stageWidth, stageHeight);
+    annotCtx.clearRect(0, 0, physicalW || stageWidth, physicalH || stageHeight);
+    annotCtx.save();
+    annotCtx.scale(currentDeviceScale, currentDeviceScale);
     for (const item of annotHistory) {
       renderSingleItem(annotCtx, item);
     }
+    annotCtx.restore();
   }
 
   function clearAnnotations() {
@@ -363,7 +378,7 @@
     redoHistory = [];
     recordedBoxes = [];
     recordedTextNotes = [];
-    annotCtx.clearRect(0, 0, stageWidth, stageHeight);
+    annotCtx.clearRect(0, 0, physicalW || stageWidth, physicalH || stageHeight);
   }
 
   function drawArrow(ctx, x1, y1, x2, y2, size, style = 'single') {
@@ -425,14 +440,18 @@
     if (safeW <= 0 || safeH <= 0) return;
 
     try {
-      const imgData = bgCtx.getImageData(mx, my, safeW, safeH);
+      const sampleX = Math.round(mx * currentDeviceScale);
+      const sampleY = Math.round(my * currentDeviceScale);
+      const sampleW = Math.max(1, Math.round(safeW * currentDeviceScale));
+      const sampleH = Math.max(1, Math.round(safeH * currentDeviceScale));
+      const imgData = bgCtx.getImageData(sampleX, sampleY, sampleW, sampleH);
       const data = imgData.data;
 
       for (let y = 0; y < safeH; y += blockSize) {
         for (let x = 0; x < safeW; x += blockSize) {
-          const px = Math.min(x, safeW - 1);
-          const py = Math.min(y, safeH - 1);
-          const pIndex = (py * safeW + px) * 4;
+          const px = Math.min(Math.round(x * currentDeviceScale), sampleW - 1);
+          const py = Math.min(Math.round(y * currentDeviceScale), sampleH - 1);
+          const pIndex = (py * sampleW + px) * 4;
           const r = data[pIndex];
           const g = data[pIndex + 1];
           const b = data[pIndex + 2];
@@ -1159,7 +1178,9 @@
       const k = e.key.toLowerCase();
       if (k === 'c') {
         try {
-          const pixel = bgCtx.getImageData(currentCursorPos.x, currentCursorPos.y, 1, 1).data;
+          const sx = Math.max(0, Math.min(Math.max(1, physicalW - 1), Math.round(currentCursorPos.x * currentDeviceScale)));
+          const sy = Math.max(0, Math.min(Math.max(1, physicalH - 1), Math.round(currentCursorPos.y * currentDeviceScale)));
+          const pixel = bgCtx.getImageData(sx, sy, 1, 1).data;
           const hex = '#' + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1);
           if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(hex);

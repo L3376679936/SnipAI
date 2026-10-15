@@ -1,5 +1,25 @@
 # REFACTOR_LOG - 项目迭代与重构全局记录
 
+## [2026-10-15] 图像渲染品质升级：突破 Retina / High-DPI 物理像素点 1:1 对齐，根除截图发糊与线条毛边（`release/utools-pure-js`）
+
+### 痛点根因分析
+- **用户痛点反馈**：*“为什么截完图，使用工具栏的时候，图片看着有点糊呢？”*
+- **根因深度定位**：
+  - Windows 系统通常开启 125%、150% 或 200% 的 High-DPI 缩放（如 1080p 屏幕物理尺寸 1920×1080，逻辑尺寸仅 1280×720）；
+  - 此前 Canvas 内部像素分辨率 `bgCanvas.width` 被简单设为了逻辑尺寸（1280×720），导致原本高清的 1920 物理像素在载入时被**下采样缩小并丢失了 56% 的像素细节**；而在高分屏上显示时，显卡又自动将其拉伸放大回 1920 物理像素，导致整个画面经历「有损下采样 ➔ 双线性模糊插值」，文字与边缘出现明显的发虚发糊与毛边！
+
+### 核心改造与画质飞跃（[`src/capture.js`](file:///e:/其他/liuaobo/AI-LAB/utools_lab/screenshotOcrTranslate/src/capture.js)）
+1. **Retina Canvas 双轨渲染架构**：
+   - **内部绘制分辨率 (`canvas.width / height`) 保持为真正的原生物理分辨率 (`physicalW × physicalH`)**，杜绝任何有损压缩下采样；
+   - **CSS 视口尺寸 (`canvas.style.width / height`) 保持为逻辑尺寸 (`stageWidth × stageHeight`)**，保证窗口大小精准贴合屏幕；
+   - 底图采用 `bgCtx.drawImage(fullSnapshotImg, 0, 0, physicalW, physicalH)` 物理像素 1:1 绝对映射，字迹纤毫毕现、锐利如刀割！
+2. **标注图元矢量抗锯齿增强**：
+   - `annotCtx` 重绘时应用 `scale(currentDeviceScale, currentDeviceScale)`，画笔轨迹、文字、几何形状自动启用高分屏物理子像素渲染，告别低分辨率粗糙锯齿；
+3. **马赛克物理像素取样与取色算法联动更新**：
+   - `drawMosaic` 取样坐标与 `C` 键取色精准匹配物理像素，马赛克块边界干净利落，色彩无损提取。
+
+---
+
 ## [2026-10-15] 比对 main 分支源码 1:1 补齐遗漏交互与工具栏高级功能（`release/utools-pure-js`）
 
 ### 深入对比 `main` 分支 C# 原版 `Program.cs` 发现的遗漏点与补齐
