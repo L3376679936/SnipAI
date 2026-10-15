@@ -186,9 +186,13 @@ window.nativeBridge = {
           const winWidth = Math.max(logicalW + GLOW_PAD * 2, TOOLBAR_WIDTH + GLOW_PAD * 2);
           const winHeight = logicalH + TOOLBAR_HEIGHT + GLOW_PAD * 2 + 10;
 
-          // 按照用户截图终点（光标点）反推窗口左上角（抵消 8px 发光边距，确保截屏画面原位 1:1 精确覆盖）
-          let winX = point.x - logicalW - GLOW_PAD;
-          let winY = point.y - logicalH - GLOW_PAD;
+          // 计算用户截选区在当前屏幕上的绝对原点 (逻辑坐标)
+          const cropX = Math.round(point.x - logicalW);
+          const cropY = Math.round(point.y - logicalH);
+
+          // 按照用户截图终点（光标点）反推窗口左上角（抵消 8px 发光边距）
+          let winX = cropX - GLOW_PAD;
+          let winY = cropY - GLOW_PAD;
 
           // 限制在当前显示器边界内，绝不跨屏跳跃到主屏
           const db = display.bounds || { x: 0, y: 0, width: 1920, height: 1080 };
@@ -197,7 +201,7 @@ window.nativeBridge = {
           if (winY < db.y) winY = db.y;
           if (winY + winHeight > db.y + db.height) winY = Math.max(db.y, db.y + db.height - winHeight);
 
-          logDebug(`悬浮工具栏精准定位: [${winX}, ${winY}], 尺寸: ${winWidth}x${winHeight}, scale=${scale}, 屏幕: ${JSON.stringify(db)}`);
+          logDebug(`悬浮工具栏精准定位: [${winX}, ${winY}], 尺寸: ${winWidth}x${winHeight}, crop: [${cropX}, ${cropY}], scale=${scale}`);
 
           // 4. 写入本地初始化文件，实现 100% 同步且防竞争的数据注入
           const initPayload = {
@@ -206,7 +210,11 @@ window.nativeBridge = {
             physH: physH,
             logicalW: logicalW,
             logicalH: logicalH,
-            scale: scale
+            scale: scale,
+            cropX: cropX,
+            cropY: cropY,
+            winX: Math.round(winX),
+            winY: Math.round(winY)
           };
           try {
             fs.writeFileSync(CAPTURE_INIT_FILE, JSON.stringify(initPayload), 'utf-8');
@@ -464,12 +472,30 @@ window.nativeBridge = {
   pinImageDataUrl: (dataUrl) => {
     try {
       if (!dataUrl) return false;
+      let winW = 600;
+      let winH = 400;
+      try {
+        const { nativeImage } = require('electron');
+        const nImg = nativeImage.createFromDataURL(dataUrl);
+        const sz = nImg.getSize();
+        if (sz && sz.width > 0 && sz.height > 0) {
+          const point = (window.utools.getCursorScreenPoint && window.utools.getCursorScreenPoint()) || { x: 0, y: 0 };
+          const display = (window.utools.getDisplayNearestPoint && window.utools.getDisplayNearestPoint(point)) || { scaleFactor: 1 };
+          const scale = display.scaleFactor || 1;
+          winW = Math.max(100, Math.round(sz.width / scale));
+          winH = Math.max(80, Math.round(sz.height / scale));
+        }
+      } catch (e) {}
+
       if (window.utools && typeof window.utools.createBrowserWindow === 'function') {
         const pinWin = window.utools.createBrowserWindow('pin.html', {
           title: '贴图',
+          width: winW,
+          height: winH,
           frame: false,
           alwaysOnTop: true,
           transparent: true,
+          backgroundColor: '#00000000',
           skipTaskbar: false,
           resizable: true,
           useContentSize: true

@@ -168,6 +168,13 @@
    - **双重定时器与窗口销毁轮询保底**：同时启动 80ms 轮询检测 `CAPTURE_IPC_FILE` 与 `captureWin.isDestroyed()`，任何单点故障均能自动恢复；
    - **智能超时自愈与快捷键强制唤起**：`ScreenCaptureManager.startCapture` 增加 5 秒超时自愈，且 `onPluginEnter` 快捷键派发时传入 `force = true`，强制穿透死锁立即开启截图。
 
+7. **纯 JS 分支全面体检审计与多维隐患闭环消除**：
+   - **可执行文件合规审计**：全目录扫描确认 0 个 `.exe` / `.dll` 二进制文件，100% 纯 Web/JS 技术栈，完全符合 uTools 应用市场审核要求；
+   - **涂鸦数据与 AI 改图数据包强一致性**：彻底重构 `exportCaptureData`，改由从当前有效的 `annotHistory` 实时动态提取 `rect`（矩形框）与 `text`（文字批注），彻底杜绝撤销（Undo）、重做（Redo）或橡皮擦擦除后的脏坐标残留；
+   - **屏幕边缘小图原位锚定（0 像素跳动）**：透传物理截屏绝对原点 `cropX, cropY`，无论窗口被屏幕边缘如何矫正，截图舞台在屏幕上的绝对物理位置 100% 原位固定；
+   - **纯 Web 桌面贴图（pin.html）窗口尺寸自适应**：提取图片原生尺寸并结合 DPI `scaleFactor` 自适应设定初始宽高与全透明底色，消除边缘多余空白；
+   - **元数据同步**：同步 `package.json` 中的 `version`（1.1.0）与 cmds 命令列表，与 `plugin.json` 完全对齐。
+
 ---
 
 

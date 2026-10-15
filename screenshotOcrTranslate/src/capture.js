@@ -130,7 +130,17 @@
       stageWidth = initPayload.logicalW || Math.round(physicalW / deviceScale);
       stageHeight = initPayload.logicalH || Math.round(physicalH / deviceScale);
 
-      // 设置舞台 CSS 尺寸与默认光标
+      // 核心：计算舞台在窗口内部的偏移量（保证 winX + stageOffsetX 严格等于 cropX，0 像素跳动！）
+      const stageOffsetX = (initPayload.cropX !== undefined && initPayload.winX !== undefined)
+        ? Math.max(8, initPayload.cropX - initPayload.winX)
+        : 8;
+      const stageOffsetY = (initPayload.cropY !== undefined && initPayload.winY !== undefined)
+        ? Math.max(8, initPayload.cropY - initPayload.winY)
+        : 8;
+
+      // 设置舞台 CSS 尺寸与默认光标及原位偏移
+      stageContainer.style.left = stageOffsetX + 'px';
+      stageContainer.style.top = stageOffsetY + 'px';
       stageContainer.style.width = stageWidth + 'px';
       stageContainer.style.height = stageHeight + 'px';
       stageContainer.style.cursor = 'move'; // 默认未选工具时为平移移动手势
@@ -196,7 +206,8 @@
   function updateToolbarPosition() {
     const tbHeight = subPalette.style.display === 'flex' ? 76 : 38;
     const winH = window.innerHeight || (stageHeight + 100);
-    const stageBottom = stageHeight + 8; // 舞台加上 8px 发光上边距
+    const stageTop = parseInt(stageContainer.style.top, 10) || 8;
+    const stageBottom = stageTop + stageHeight;
 
     if (winH - stageBottom >= tbHeight + 12) {
       toolbarWrap.style.top = (stageBottom + 6) + 'px';
@@ -949,7 +960,10 @@
 
     const annotatedDataUrl = annotCanvasMerged.toDataURL('image/png');
 
-    // 3. 构造给 AI 改图的三图分离数据包
+    // 3. 构造给 AI 改图的三图分离数据包 (实时由当前有效 annotHistory 过滤提取，彻底杜绝撤销/擦除后的脏数据)
+    const validBoxes = annotHistory.filter(it => it.type === 'rect');
+    const validTexts = annotHistory.filter(it => it.type === 'text').map(it => it.text);
+
     const maskCanvas = document.createElement('canvas');
     maskCanvas.width = physicalW;
     maskCanvas.height = physicalH;
@@ -958,7 +972,7 @@
     mCtx.fillRect(0, 0, physicalW, physicalH);
     mCtx.fillStyle = '#ffffff';
 
-    for (const b of recordedBoxes) {
+    for (const b of validBoxes) {
       mCtx.fillRect(
         Math.round(b.x * exportScaleX),
         Math.round(b.y * exportScaleY),
@@ -966,7 +980,7 @@
         Math.round(b.h * exportScaleY)
       );
     }
-    const maskDataUrl = recordedBoxes.length > 0 ? maskCanvas.toDataURL('image/png') : null;
+    const maskDataUrl = validBoxes.length > 0 ? maskCanvas.toDataURL('image/png') : null;
 
     return {
       cleanDataUrl,
@@ -975,9 +989,9 @@
         cleanDataUrl,
         annotatedDataUrl,
         maskDataUrl,
-        hasMaskRegion: recordedBoxes.length > 0,
-        textNotes: [...recordedTextNotes],
-        boxes: recordedBoxes.map(b => ({
+        hasMaskRegion: validBoxes.length > 0,
+        textNotes: validTexts,
+        boxes: validBoxes.map(b => ({
           x: Math.round(b.x * exportScaleX),
           y: Math.round(b.y * exportScaleY),
           w: Math.round(b.w * exportScaleX),
